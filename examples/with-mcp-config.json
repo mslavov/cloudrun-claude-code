@@ -1,0 +1,19 @@
+{
+  "prompt": "Review the latest PRs and suggest improvements",
+  "systemPrompt": "You are a senior code reviewer specializing in TypeScript",
+  "maxTurns": 8,
+  "allowedTools": ["Read", "Write", "Grep", "WebFetch"],
+  "permissionMode": "acceptEdits",
+  "mcpConfigJson": {
+    "mcpServers": {
+      "github": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-github@latest"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      }
+    }
+  }
+}

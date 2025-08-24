@@ -1,0 +1,7 @@
+{
+  "prompt": "Analyze this codebase for security vulnerabilities",
+  "systemPrompt": "You are a security expert specializing in application security and vulnerability assessment. Focus on OWASP Top 10 risks and provide detailed remediation steps.",
+  "maxTurns": 10,
+  "allowedTools": ["Read", "Grep", "WebSearch"],
+  "permissionMode": "plan"
+}

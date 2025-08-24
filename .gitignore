@@ -1,0 +1,14 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.deploy
+.env.deploy.yaml
+*.log
+.DS_Store
+tmp/
+secrets/
+*.key
+*.pem
+service_account.json
+*_service_account.json

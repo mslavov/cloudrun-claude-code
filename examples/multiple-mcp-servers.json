@@ -1,0 +1,37 @@
+{
+  "prompt": "Create a task in Jira for the latest GitHub issue and post an update to Slack",
+  "systemPrompt": "You are a project management assistant that helps coordinate tasks across different platforms",
+  "maxTurns": 12,
+  "allowedTools": ["WebFetch", "WebSearch"],
+  "permissionMode": "acceptEdits",
+  "mcpConfigJson": {
+    "mcpServers": {
+      "github": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-github@latest"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      },
+      "slack": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-slack@latest"],
+        "env": {
+          "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}"
+        }
+      },
+      "jira": {
+        "type": "stdio",
+        "command": "npx",
+        "args": ["@modelcontextprotocol/server-jira@latest"],
+        "env": {
+          "JIRA_API_TOKEN": "${JIRA_API_TOKEN}",
+          "JIRA_EMAIL": "${JIRA_EMAIL}",
+          "JIRA_BASE_URL": "${JIRA_BASE_URL}"
+        }
+      }
+    }
+  }
+}

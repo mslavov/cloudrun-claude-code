@@ -68,6 +68,10 @@ vim .env
 ./scripts/build-and-push.sh    # Build and push Docker image
 ./scripts/deploy-service.sh    # Deploy to Cloud Run
 
+# Optional: Set up service account for production (after deployment)
+./scripts/setup-service-account.sh    # Configure service account with Secret Manager access
+./scripts/download-service-account-key.sh  # Download key for local testing (optional)
+
 # Test the deployment
 ./scripts/test.sh remote
 ```
@@ -91,7 +95,15 @@ curl https://your-service-url/health?verbose=true
 ### Run Agent
 
 ```bash
-# Simple request (uses default config from .env)
+# For public endpoints (no authentication required if service account is configured)
+curl -N -X POST https://your-service-url/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Generate a test plan for login functionality",
+    "maxTurns": 6
+  }'
+
+# For private endpoints (with IAM authentication)
 curl -N -X POST https://your-service-url/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
@@ -218,9 +230,11 @@ The Dockerfile installs Claude CLI globally following the official pattern:
 All deployment scripts are in the `scripts/` folder:
 
 - `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM)
+- `setup-service-account.sh` - Set up service account with Secret Manager access
+- `download-service-account-key.sh` - Download service account key for local testing
 - `create-secrets.sh` - Create/update Secret Manager secrets
 - `build-and-push.sh` - Build and push Docker image to Artifact Registry
-- `deploy-service.sh` - Deploy service to Cloud Run
+- `deploy-service.sh` - Deploy service to Cloud Run with service account
 - `setup-vpc.sh` - (Optional) Configure VPC network and firewall rules
 - `load-env.sh` - Helper script to load environment variables
 

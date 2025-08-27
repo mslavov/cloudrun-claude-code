@@ -13,7 +13,7 @@ WORKDIR /app
 
 # Install system dependencies needed for Claude Code SDK
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash git ripgrep ca-certificates curl \
+    bash git ripgrep ca-certificates curl openssh-client \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code using the official install script
@@ -50,10 +50,20 @@ RUN useradd -m -u 1001 -s /bin/bash appuser && \
     chown -R appuser:appuser /opt/claude && \
     chown -R appuser:appuser /opt/claude-share && \
     # Create .claude symlink for appuser
-    ln -s /opt/claude /home/appuser/.claude
+    ln -s /opt/claude /home/appuser/.claude && \
+    # Setup SSH directory for appuser
+    mkdir -p /home/appuser/.ssh && \
+    chmod 700 /home/appuser/.ssh && \
+    chown -R appuser:appuser /home/appuser/.ssh && \
+    # Create secrets directory
+    mkdir -p /secrets && \
+    chown appuser:appuser /secrets
 
 # Switch to non-root user
 USER appuser
+
+# Configure git to skip host verification for SSH
+RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 EXPOSE 8080
 CMD ["node", "dist/server.js"]

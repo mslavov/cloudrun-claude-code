@@ -80,4 +80,23 @@ if [ -n "$SLACK_BOT_TOKEN" ]; then
   echo "✓ SLACK_BOT_TOKEN secret created/updated"
 fi
 
+# Create Git SSH key secret if set
+if [ -n "$GIT_SSH_KEY" ]; then
+  echo -n "${GIT_SSH_KEY}" | gcloud secrets create GIT_SSH_KEY \
+    --data-file=- \
+    --project="${PROJECT_ID}" \
+    2>/dev/null || \
+  echo -n "${GIT_SSH_KEY}" | gcloud secrets versions add GIT_SSH_KEY \
+    --data-file=- \
+    --project="${PROJECT_ID}"
+  echo "✓ GIT_SSH_KEY secret created/updated"
+fi
+
+# Note: Environment secrets are now managed dynamically
+# They are fetched at runtime based on the repository URL using the naming convention:
+# - env-{org}-{repo}
+# - env-{org}-{repo}-{branch}
+# 
+# Use manage-env-secret.sh to create/update repository-specific secrets
+
 echo "All secrets have been processed successfully"

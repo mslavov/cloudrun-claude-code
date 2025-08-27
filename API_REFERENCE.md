@@ -106,7 +106,7 @@ curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
 
 ### POST /run
 
-Execute a Claude Code prompt with streaming response.
+Execute a Claude Code prompt with streaming response, optionally cloning a git repository and loading runtime environment variables.
 
 #### Request
 
@@ -130,6 +130,9 @@ Execute a Claude Code prompt with streaming response.
 | `fallbackModel` | string | No | - | Fallback model if primary fails |
 | `useNamedPipe` | boolean | No | true | Use named pipe for prompt delivery |
 | `timeoutMinutes` | number | No | 10 | Process timeout in minutes |
+| `gitRepo` | string | No | - | SSH git repository URL to clone (e.g., `git@github.com:user/repo.git`) |
+| `gitBranch` | string | No | main | Git branch to checkout |
+| `gitDepth` | number | No | 1 | Clone depth for shallow cloning |
 
 #### Response
 
@@ -274,6 +277,41 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
     "fallbackModel": "claude-3-5-haiku-latest"
   }'
 ```
+
+### With Git Repository Clone
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run tests and fix any failing ones",
+    "gitRepo": "git@github.com:myorg/myproject.git",
+    "gitBranch": "feature-branch",
+    "gitDepth": 1
+  }'
+```
+
+**Note**: Requires SSH key to be configured as a secret (`GIT_SSH_KEY`) and mounted to the container at `/home/appuser/.ssh/id_rsa`.
+
+### With Automatic Environment Variables
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Test database connectivity and run migrations",
+    "gitRepo": "git@github.com:myorg/myproject.git",
+    "gitBranch": "staging"
+  }'
+```
+
+**Note**: Environment variables are automatically loaded based on the repository URL using the naming convention:
+- `env-{org}-{repo}` - Default environment for the repository
+- `env-{org}-{repo}-{branch}` - Branch-specific environment (overrides default)
+
+The service will automatically fetch the appropriate secret from Google Secret Manager.
 
 ## Client Examples
 
@@ -524,8 +562,96 @@ Each request creates an ephemeral workspace at `/tmp/ws-{requestId}` that is:
 - Automatically cleaned up after completion
 - Limited to the request's lifecycle
 - Not persisted between requests
+- Can be initialized with a git repository using `gitRepo` parameter
+- Can include runtime environment variables via `envSecretName`
 
 To work with persistent data, consider:
 - Using MCP servers for database access
 - Mounting Cloud Storage buckets
 - Using environment variables for configuration
+
+## Git Repository Support
+
+The service supports cloning git repositories into the workspace:
+
+### SSH Key Configuration
+
+1. **Create SSH Key Secret**:
+   ```bash
+   # Generate SSH key pair if needed
+   ssh-keygen -t ed25519 -C "claude-code@example.com" -f claude_key
+   
+   # Create secret in Google Cloud
+   gcloud secrets create GIT_SSH_KEY \
+     --data-file=claude_key \
+     --project=YOUR-PROJECT-ID
+   ```
+
+2. **Add Public Key to Git Provider**:
+   - GitHub: Settings → SSH and GPG keys → New SSH key
+   - GitLab: Settings → SSH Keys
+   - Bitbucket: Personal settings → SSH keys
+
+3. **Deploy with SSH Key Mounted**:
+   The deployment script automatically mounts the SSH key at `/home/appuser/.ssh/id_rsa`
+
+### Dynamic Environment Secrets
+
+Environment variables are now fetched dynamically based on the repository URL. Use the naming convention:
+- `env-{org}-{repo}` - Default environment for a repository
+- `env-{org}-{repo}-{branch}` - Branch-specific environment
+
+#### Managing Environment Secrets
+
+Use the provided helper script `scripts/manage-env-secret.sh`:
+
+```bash
+# Create a new environment secret
+cat .env | ./scripts/manage-env-secret.sh create mycompany backend
+
+# Create branch-specific environment
+cat .env.staging | ./scripts/manage-env-secret.sh create mycompany backend staging
+
+# Update an existing secret
+cat .env.updated | ./scripts/manage-env-secret.sh update mycompany backend
+
+# Retrieve a secret
+./scripts/manage-env-secret.sh get mycompany backend
+
+# Delete a secret
+./scripts/manage-env-secret.sh delete mycompany backend staging
+
+# List all environment secrets
+./scripts/manage-env-secret.sh list
+```
+
+#### Direct Management with gcloud
+
+```bash
+# Create environment secret
+cat .env | gcloud secrets create env-mycompany-backend \
+  --data-file=- \
+  --project=YOUR-PROJECT-ID \
+  --labels="type=env,org=mycompany,repo=backend"
+
+# Update secret version
+cat .env | gcloud secrets versions add env-mycompany-backend \
+  --data-file=- \
+  --project=YOUR-PROJECT-ID
+```
+
+The service automatically:
+- Parses the repository URL to determine org/repo
+- Fetches the appropriate secret from Secret Manager
+- Falls back from branch-specific to repository default
+- Writes to workspace as `.env`
+- Injects as environment variables for Claude
+
+#### Required IAM Permissions
+
+The Cloud Run service account needs:
+```bash
+gcloud projects add-iam-policy-binding YOUR-PROJECT-ID \
+  --member="serviceAccount:YOUR-SERVICE-ACCOUNT@YOUR-PROJECT-ID.iam.gserviceaccount.com" \
+  --role="roles/secretmanager.secretAccessor"
+```

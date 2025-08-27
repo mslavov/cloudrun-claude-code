@@ -1,6 +1,6 @@
 # Claude Code on Cloud Run
 
-Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service with dynamic configuration for MCP servers, system prompts, and tool permissions.
+Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service with dynamic configuration for system prompts and tool permissions.
 
 > **Note**: The Claude Code SDK is installed globally in the Docker container following the official Anthropic Docker setup pattern. This improves compatibility and reduces potential conflicts.
 
@@ -8,7 +8,6 @@ Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service
 
 - ✅ Claude Code CLI integration (official distribution)
 - ✅ API key authentication
-- ✅ Dynamic MCP server configuration
 - ✅ Hot-reloadable system prompts via Secret Manager
 - ✅ Secure VPC egress with firewall rules
 - ✅ Per-request ephemeral workspaces
@@ -92,6 +91,41 @@ curl https://your-service-url/health?verbose=true
 # Note: Both /health and /healthz endpoints work identically
 ```
 
+### Secret Management API
+
+The service includes a RESTful API for managing environment secrets:
+
+```bash
+# List all secrets
+curl https://your-service-url/api/secrets/list?org=myorg&repo=myrepo
+
+# Get secret content for a repository
+curl https://your-service-url/api/secrets/get?gitRepo=git@github.com:myorg/myrepo.git&gitBranch=main
+
+# Create a new secret
+curl -X POST https://your-service-url/api/secrets/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "myorg",
+    "repo": "myrepo",
+    "branch": "customers/acme/main",
+    "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=..."
+  }'
+
+# Update an existing secret
+curl -X PUT https://your-service-url/api/secrets/update \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "myorg",
+    "repo": "myrepo",
+    "branch": "staging",
+    "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=..."
+  }'
+
+# Delete a secret
+curl -X DELETE "https://your-service-url/api/secrets/delete?org=myorg&repo=myrepo&branch=staging"
+```
+
 ### Run Agent
 
 ```bash
@@ -112,26 +146,16 @@ curl -N -X POST https://your-service-url/run \
     "maxTurns": 6
   }'
 
-# With dynamic MCP configuration (passed per-request)
+# With custom system prompt and tools
 curl -N -X POST https://your-service-url/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
-    "prompt": "Review the latest PRs and suggest tests",
-    "systemPrompt": "You are a QA engineer",
+    "prompt": "Review the code and suggest improvements",
+    "systemPrompt": "You are a code reviewer focusing on best practices",
     "allowedTools": ["Read", "Write", "Grep"],
     "permissionMode": "acceptEdits",
-    "maxTurns": 6,
-    "mcpConfigJson": {
-      "mcpServers": {
-        "github": {
-          "type": "stdio",
-          "command": "npx",
-          "args": ["@modelcontextprotocol/server-github@latest"],
-          "env": {"GITHUB_TOKEN": "ghp_your_token_here"}
-        }
-      }
-    }
+    "maxTurns": 6
   }'
 
 # With specific model and disallowed tools
@@ -163,7 +187,6 @@ See `examples/` folder for more request examples.
 | `allowedTools` | string[] | List of allowed tools | Env var |
 | `disallowedTools` | string[] | List of tools to explicitly block | - |
 | `permissionMode` | string | Permission mode (`acceptEdits`, `bypassPermissions`, `plan`) | Env var |
-| `mcpConfigJson` | object | MCP server configuration | - |
 | `maxTurns` | number | Maximum conversation turns | 6 |
 | `cwdRelative` | string | Working directory path | "." |
 | `model` | string | Specific Claude model to use | - |

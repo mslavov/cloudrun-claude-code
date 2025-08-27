@@ -104,6 +104,116 @@ curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
 
 ## Endpoints
 
+### Secret Management Endpoints
+
+The service provides a RESTful API for managing environment secrets that are automatically loaded when cloning git repositories.
+
+#### GET /api/secrets/list
+
+List all environment secrets, optionally filtered by organization and repository.
+
+**Query Parameters:**
+- `org` (string, optional): Filter by organization name
+- `repo` (string, optional): Filter by repository name
+
+**Response:**
+```json
+{
+  "secrets": [
+    "env_myorg_myrepo",
+    "env_myorg_myrepo_staging",
+    "env_myorg_myrepo_customers__acme__main"
+  ]
+}
+```
+
+#### GET /api/secrets/get
+
+Fetch environment variables for a repository. Uses hierarchical resolution to find the most specific secret.
+
+**Query Parameters:**
+- `gitRepo` (string, required): Git repository URL (e.g., `git@github.com:org/repo.git`)
+- `gitBranch` (string, optional): Branch name (supports slashes like `customers/acme/main`)
+
+**Response:**
+```json
+{
+  "exists": true,
+  "secretName": "env_myorg_myrepo_customers__acme",
+  "env": {
+    "DATABASE_URL": "postgres://...",
+    "API_KEY": "..."
+  }
+}
+```
+
+**Hierarchical Resolution:**
+For branch `customers/acme/main`, the service tries in order:
+1. `env_org_repo_customers__acme__main` (most specific)
+2. `env_org_repo_customers__acme` (parent path)
+3. `env_org_repo_customers` (root path)
+4. `env_org_repo` (repository default)
+
+#### POST /api/secrets/create
+
+Create a new environment secret.
+
+**Request Body:**
+```json
+{
+  "org": "myorg",
+  "repo": "myrepo",
+  "branch": "customers/acme/main",
+  "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "secretName": "env_myorg_myrepo_customers__acme__main"
+}
+```
+
+#### PUT /api/secrets/update
+
+Update an existing environment secret.
+
+**Request Body:**
+```json
+{
+  "org": "myorg",
+  "repo": "myrepo",
+  "branch": "staging",
+  "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
+}
+```
+
+**Response:**
+```json
+{
+  "success": true,
+  "version": "2"
+}
+```
+
+#### DELETE /api/secrets/delete
+
+Delete an environment secret.
+
+**Query Parameters:**
+- `org` (string, required): Organization name
+- `repo` (string, required): Repository name
+- `branch` (string, optional): Branch name
+
+**Response:**
+```json
+{
+  "success": true
+}
+```
+
 ### POST /run
 
 Execute a Claude Code prompt with streaming response, optionally cloning a git repository and loading runtime environment variables.
@@ -124,7 +234,6 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `allowedTools` | string[] | No | Environment | List of allowed tools Claude can use |
 | `disallowedTools` | string[] | No | - | List of tools to explicitly block |
 | `permissionMode` | string | No | Environment | Permission mode: `acceptEdits`, `bypassPermissions`, or `plan` |
-| `mcpConfigJson` | object | No | - | MCP server configuration |
 | `maxTurns` | number | No | 6 | Maximum conversation turns |
 | `model` | string | No | - | Specific Claude model to use |
 | `fallbackModel` | string | No | - | Fallback model if primary fails |
@@ -208,25 +317,6 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   }'
 ```
 
-### With MCP Server Configuration
-
-```bash
-curl -X POST https://YOUR-SERVICE-URL.run.app/run \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
-  -d '{
-    "prompt": "Query the database for users",
-    "mcpConfigJson": {
-      "mcpServers": {
-        "sqlite": {
-          "command": "uvx",
-          "args": ["mcp-server-sqlite", "--db-path", "/tmp/database.db"]
-        }
-      }
-    }
-  }'
-```
-
 ### Plan Mode Example
 
 ```bash
@@ -307,11 +397,11 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   }'
 ```
 
-**Note**: Environment variables are automatically loaded based on the repository URL using the naming convention:
-- `env-{org}-{repo}` - Default environment for the repository
-- `env-{org}-{repo}-{branch}` - Branch-specific environment (overrides default)
+**Note**: Environment variables are automatically loaded based on the repository URL using hierarchical resolution:
+- `env_{org}_{repo}` - Default environment for the repository
+- `env_{org}_{repo}_{branch}` - Branch-specific environment (branch slashes replaced with `__`)
 
-The service will automatically fetch the appropriate secret from Google Secret Manager.
+The service uses hierarchical resolution, trying from most specific to least specific secret, allowing inheritance of common variables.
 
 ## Client Examples
 
@@ -477,7 +567,6 @@ The following tools can be configured via `allowedTools` and `disallowedTools`:
 - **Task Management**: `TodoWrite`, `Task`
 - **Planning**: `ExitPlanMode`
 - **Notebook**: `NotebookEdit`
-- **MCP Tools**: Any tools exposed by configured MCP servers
 
 ### Permission Modes
 
@@ -542,8 +631,7 @@ pip install google-auth google-auth-httplib2 requests
 3. **Restrict Tools for Security**: Use `allowedTools` to limit permissions
 4. **Handle Streaming Properly**: Implement proper SSE parsing in clients
 5. **Use Plan Mode for Review**: Set `permissionMode: "plan"` to preview changes
-6. **Configure MCP Servers**: Use `mcpConfigJson` for database or API access
-7. **Monitor Health Endpoint**: Regularly check `/health` for service status
+6. **Monitor Health Endpoint**: Regularly check `/health` for service status
 
 ## Security Considerations
 
@@ -563,10 +651,9 @@ Each request creates an ephemeral workspace at `/tmp/ws-{requestId}` that is:
 - Limited to the request's lifecycle
 - Not persisted between requests
 - Can be initialized with a git repository using `gitRepo` parameter
-- Can include runtime environment variables via `envSecretName`
+- Can include runtime environment variables via automatic secret loading
 
 To work with persistent data, consider:
-- Using MCP servers for database access
 - Mounting Cloud Storage buckets
 - Using environment variables for configuration
 
@@ -597,45 +684,74 @@ The service supports cloning git repositories into the workspace:
 
 ### Dynamic Environment Secrets
 
-Environment variables are now fetched dynamically based on the repository URL. Use the naming convention:
-- `env-{org}-{repo}` - Default environment for a repository
-- `env-{org}-{repo}-{branch}` - Branch-specific environment
+Environment variables are now fetched dynamically based on the repository URL. The service uses underscores as separators and supports hierarchical resolution:
 
-#### Managing Environment Secrets
+**Naming Convention:**
+- `env_{org}_{repo}` - Default environment for a repository
+- `env_{org}_{repo}_{branch}` - Branch-specific environment (branch slashes replaced with `__`)
 
-Use the provided helper script `scripts/manage-env-secret.sh`:
+**Examples:**
+- Repository default: `env_mycompany_backend`
+- Main branch: `env_mycompany_backend` (uses repository default)
+- Feature branch: `env_mycompany_backend_feature__auth`
+- Customer branch: `env_mycompany_backend_customers__acme__main`
+
+**Hierarchical Resolution:**
+For complex branch structures like `customers/acme/feature/auth`, the service tries:
+1. `env_mycompany_backend_customers__acme__feature__auth` (most specific)
+2. `env_mycompany_backend_customers__acme__feature`
+3. `env_mycompany_backend_customers__acme`
+4. `env_mycompany_backend_customers`
+5. `env_mycompany_backend` (repository default)
+
+This allows you to define common environment variables at higher levels and override specific ones at branch levels.
+
+#### Managing Environment Secrets via API
 
 ```bash
-# Create a new environment secret
-cat .env | ./scripts/manage-env-secret.sh create mycompany backend
+# Create repository-level secret
+curl -X POST https://YOUR-SERVICE-URL/api/secrets/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "envContent": "DATABASE_URL=postgres://prod...\nAPI_KEY=sk-prod..."
+  }'
 
-# Create branch-specific environment
-cat .env.staging | ./scripts/manage-env-secret.sh create mycompany backend staging
+# Create customer-specific secret
+curl -X POST https://YOUR-SERVICE-URL/api/secrets/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "branch": "customers/acme",
+    "envContent": "DATABASE_URL=postgres://acme...\nCUSTOMER_ID=acme"
+  }'
 
-# Update an existing secret
-cat .env.updated | ./scripts/manage-env-secret.sh update mycompany backend
-
-# Retrieve a secret
-./scripts/manage-env-secret.sh get mycompany backend
-
-# Delete a secret
-./scripts/manage-env-secret.sh delete mycompany backend staging
-
-# List all environment secrets
-./scripts/manage-env-secret.sh list
+# The service will automatically inherit from parent levels
 ```
 
 #### Direct Management with gcloud
 
 ```bash
-# Create environment secret
-cat .env | gcloud secrets create env-mycompany-backend \
+# Create environment secret with new naming convention
+cat .env | gcloud secrets create env_mycompany_backend \
   --data-file=- \
   --project=YOUR-PROJECT-ID \
   --labels="type=env,org=mycompany,repo=backend"
 
+# Create branch-specific secret
+cat .env.staging | gcloud secrets create env_mycompany_backend_staging \
+  --data-file=- \
+  --project=YOUR-PROJECT-ID
+
+# Create customer-specific secret
+cat .env.customer | gcloud secrets create env_mycompany_backend_customers__acme \
+  --data-file=- \
+  --project=YOUR-PROJECT-ID
+
 # Update secret version
-cat .env | gcloud secrets versions add env-mycompany-backend \
+cat .env | gcloud secrets versions add env_mycompany_backend \
   --data-file=- \
   --project=YOUR-PROJECT-ID
 ```

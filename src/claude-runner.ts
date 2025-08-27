@@ -11,7 +11,6 @@ export type ClaudeOptions = {
   allowedTools?: string[];
   disallowedTools?: string[];
   maxTurns?: number;
-  mcpConfig?: string;
   systemPrompt?: string;
   appendSystemPrompt?: string;
   claudeEnv?: Record<string, string>;
@@ -62,9 +61,6 @@ export class ClaudeRunner {
     }
     if (options.maxTurns) {
       claudeArgs.push("--max-turns", options.maxTurns.toString());
-    }
-    if (options.mcpConfig) {
-      claudeArgs.push("--mcp-config", options.mcpConfig);
     }
     if (options.systemPrompt) {
       claudeArgs.push("--system-prompt", options.systemPrompt);

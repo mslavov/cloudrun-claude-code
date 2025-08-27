@@ -92,11 +92,4 @@ if [ -n "$GIT_SSH_KEY" ]; then
   echo "✓ GIT_SSH_KEY secret created/updated"
 fi
 
-# Note: Environment secrets are now managed dynamically
-# They are fetched at runtime based on the repository URL using the naming convention:
-# - env-{org}-{repo}
-# - env-{org}-{repo}-{branch}
-# 
-# Use manage-env-secret.sh to create/update repository-specific secrets
-
 echo "All secrets have been processed successfully"

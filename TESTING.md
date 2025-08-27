@@ -29,13 +29,12 @@ npm run dev
 
 3. **Manual testing with curl:**
 ```bash
-# Simple request with dynamic MCP configuration
+# Simple request
 curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Your prompt here",
     "maxTurns": 3,
-    "mcpConfigJson": {"mcpServers": {}},
     "allowedTools": ["Read", "Write"],
     "permissionMode": "bypassPermissions"
   }'
@@ -53,26 +52,6 @@ curl -N -X POST http://localhost:8080/run \
 2. **Test the deployed service:**
 ```bash
 ./scripts/test.sh remote
-```
-
-## Dynamic MCP Configuration
-
-Every request can include its own MCP server configuration:
-
-```json
-{
-  "prompt": "Your task",
-  "mcpConfigJson": {
-    "mcpServers": {
-      "github": {
-        "type": "stdio",
-        "command": "npx",
-        "args": ["@modelcontextprotocol/server-github@latest"],
-        "env": {"GITHUB_TOKEN": "ghp_YOUR_TOKEN"}
-      }
-    }
-  }
-}
 ```
 
 ## Test Script Features
@@ -93,9 +72,6 @@ Set these in your `.env` file or export them:
 # Authentication (choose one)
 ANTHROPIC_API_KEY=sk-ant-...
 CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token
-
-# Optional for MCP servers
-GITHUB_TOKEN=ghp_...
 ```
 
 ## Troubleshooting
@@ -103,8 +79,117 @@ GITHUB_TOKEN=ghp_...
 - **Server not running:** Start with `npm run dev`
 - **Authentication errors:** Check your API key or OAuth token
 - **Remote test failures:** Ensure service is deployed and you're authenticated with gcloud
-- **MCP errors:** Verify tokens and server configurations in your request
 
 ## Example Requests
 
 Run `./scripts/test.sh examples` to see comprehensive API request examples for various use cases.
+
+## Testing Secret Management API
+
+### Set up test environment
+```bash
+export SERVICE_URL=https://your-service-url.run.app
+# Or for local testing
+export SERVICE_URL=http://localhost:8080
+```
+
+### Test Secret CRUD Operations
+
+```bash
+# 1. List all secrets
+curl "$SERVICE_URL/api/secrets/list" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+
+# 2. Create a repository-level secret
+curl -X POST "$SERVICE_URL/api/secrets/create" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "envContent": "DATABASE_URL=postgres://localhost:5432/mydb\nAPI_KEY=sk-test-123\nREDIS_URL=redis://localhost:6379"
+  }'
+
+# 3. Create customer-specific secrets with hierarchical structure
+curl -X POST "$SERVICE_URL/api/secrets/create" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "branch": "customers/acme",
+    "envContent": "CUSTOMER_ID=acme\nCUSTOMER_TIER=enterprise"
+  }'
+
+curl -X POST "$SERVICE_URL/api/secrets/create" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "branch": "customers/acme/staging",
+    "envContent": "ENVIRONMENT=staging\nDEBUG=true"
+  }'
+
+# 4. Test hierarchical resolution
+# This will inherit from: customers/acme/staging -> customers/acme -> repository default
+curl "$SERVICE_URL/api/secrets/get?gitRepo=git@github.com:mycompany/backend.git&gitBranch=customers/acme/staging" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+
+# 5. Update a secret
+curl -X PUT "$SERVICE_URL/api/secrets/update" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "org": "mycompany",
+    "repo": "backend",
+    "branch": "customers/acme/staging",
+    "envContent": "ENVIRONMENT=staging\nDEBUG=false\nVERSION=2.0"
+  }'
+
+# 6. Delete a secret
+curl -X DELETE "$SERVICE_URL/api/secrets/delete?org=mycompany&repo=backend&branch=customers/acme/staging" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+```
+
+### Test with Git Repository Integration
+
+```bash
+# Test automatic environment loading with repository clone
+curl -N -X POST $SERVICE_URL/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Print all environment variables that start with CUSTOMER_ or DATABASE_",
+    "gitRepo": "git@github.com:mycompany/backend.git",
+    "gitBranch": "customers/acme/staging",
+    "allowedTools": ["Bash"],
+    "maxTurns": 1
+  }'
+```
+
+### Test Hierarchical Resolution Scenarios
+
+```bash
+# Scenario 1: Branch with no specific secret (uses repository default)
+curl "$SERVICE_URL/api/secrets/get?gitRepo=git@github.com:mycompany/backend.git&gitBranch=feature/new-feature" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+
+# Scenario 2: Complex branch hierarchy
+# Create secrets at different levels
+for branch in "customers" "customers/bigcorp" "customers/bigcorp/production"; do
+  curl -X POST "$SERVICE_URL/api/secrets/create" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+    -d "{
+      \"org\": \"mycompany\",
+      \"repo\": \"backend\",
+      \"branch\": \"$branch\",
+      \"envContent\": \"LEVEL=$branch\\nTIMESTAMP=$(date +%s)\"
+    }"
+done
+
+# Test resolution at deepest level
+curl "$SERVICE_URL/api/secrets/get?gitRepo=git@github.com:mycompany/backend.git&gitBranch=customers/bigcorp/production/hotfix" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+```

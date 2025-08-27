@@ -192,6 +192,10 @@ See `examples/` folder for more request examples.
 | `model` | string | Specific Claude model to use | - |
 | `fallbackModel` | string | Fallback model if primary fails | - |
 | `useNamedPipe` | boolean | Use named pipe for prompt delivery (better for large prompts) | true |
+| `gitRepo` | string | Git repository URL to clone (SSH or HTTPS) | - |
+| `gitBranch` | string | Branch to checkout | "main" |
+| `gitDepth` | number | Clone depth for shallow cloning | 1 |
+| `timeoutMinutes` | number | Process timeout in minutes | 10 |
 
 ### Environment Variables
 
@@ -206,6 +210,11 @@ See `examples/` folder for more request examples.
 - `ALLOWED_TOOLS`: Comma-separated list of allowed tools
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
 
+**Git Repository Support:**
+- `GIT_SSH_KEY`: SSH private key for cloning private repositories
+  - Required when using `gitRepo` parameter with SSH URLs
+  - See Git Repository Setup section below
+
 ### Tool Permissions
 
 Examples:
@@ -214,6 +223,97 @@ Examples:
 - `WebSearch` - Web search capability
 - `WebFetch` - Web content fetching
 
+## Git Repository Setup
+
+The service can clone and work with git repositories during request execution. This is useful for analyzing codebases, running tests, or making changes to existing projects.
+
+### Setting up SSH Key for Private Repositories
+
+#### Automatic Setup (GitHub)
+
+Use the provided script to automatically generate an SSH key and add it to GitHub:
+
+```bash
+# Generate key and add to GitHub (requires gh CLI)
+./scripts/gen_key.sh
+
+# This script will:
+# 1. Generate an SSH key pair in .keys/ directory
+# 2. Add the public key to your GitHub account
+# 3. Add the private key to your .env file
+# 4. Test the SSH connection
+# 5. Ensure .keys/ is in .gitignore
+
+# Optionally specify a custom key name
+./scripts/gen_key.sh my_custom_key
+
+# Then deploy the secret to Google Cloud
+./scripts/create-secrets.sh
+```
+
+#### Manual Setup
+
+1. **Generate an SSH key pair** (if you don't have one):
+```bash
+# Create keys directory
+mkdir -p .keys
+
+# Generate key pair in .keys directory
+ssh-keygen -t ed25519 -C "claude-code@example.com" -f .keys/claude_ssh_key
+# This creates .keys/claude_ssh_key (private) and .keys/claude_ssh_key.pub (public)
+```
+
+2. **Add the public key to your Git provider**:
+   - **GitHub**: Settings → SSH and GPG keys → New SSH key
+   - **GitLab**: Settings → SSH Keys → Add new key
+   - **Bitbucket**: Personal settings → SSH keys → Add key
+   - Copy the contents of `.keys/claude_ssh_key.pub` and paste it
+
+3. **Set the private key in your `.env` file**:
+```bash
+# Read the private key and add it to .env
+echo "GIT_SSH_KEY=\"$(cat .keys/claude_ssh_key)\"" >> .env
+```
+
+4. **Deploy the secret** (the deployment script handles this automatically):
+```bash
+./scripts/create-secrets.sh
+# This will create/update the GIT_SSH_KEY secret in Google Secret Manager
+```
+
+### Using Git Repositories in Requests
+
+Once the SSH key is configured, you can clone repositories in your requests:
+
+```bash
+# Clone and analyze a private repository
+curl -N -X POST https://your-service-url/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Analyze the codebase and suggest improvements",
+    "gitRepo": "git@github.com:your-org/private-repo.git",
+    "gitBranch": "develop",
+    "gitDepth": 10,
+    "allowedTools": ["Read", "Grep", "LS"]
+  }'
+
+# Work with a specific customer branch
+curl -N -X POST https://your-service-url/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run the test suite and fix any failing tests",
+    "gitRepo": "git@github.com:your-org/app.git",
+    "gitBranch": "customers/acme/staging",
+    "allowedTools": ["Read", "Write", "Edit", "Bash"]
+  }'
+```
+
+### Automatic Environment Variables
+
+When cloning a repository, the service automatically loads environment variables based on the repository and branch using the hierarchical secret resolution system. See the Secret Management API section for details.
+
 ## Security Considerations
 
 1. **Network Isolation**: Use Direct VPC egress with firewall rules
@@ -221,6 +321,7 @@ Examples:
 3. **Tool Restrictions**: Carefully configure allowed tools
 4. **Permission Mode**: Start with `acceptEdits` for safety
 5. **Ephemeral Workspaces**: Each request gets isolated `/tmp` workspace
+6. **SSH Key Security**: Store SSH keys securely in Secret Manager, never commit them
 
 ## Local Development
 
@@ -252,6 +353,7 @@ The Dockerfile installs Claude CLI globally following the official pattern:
 
 All deployment scripts are in the `scripts/` folder:
 
+- `gen_key.sh` - Generate SSH key and automatically add it to GitHub
 - `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM)
 - `setup-service-account.sh` - Set up service account with Secret Manager access
 - `download-service-account-key.sh` - Download service account key for local testing

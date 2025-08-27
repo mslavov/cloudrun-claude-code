@@ -54,32 +54,6 @@ if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo "✓ CLAUDE_CODE_OAUTH_TOKEN secret created/updated"
 fi
 
-# No system prompt or MCP secrets needed - all configuration is dynamic
-
-# Create GitHub token secret if set
-if [ -n "$GITHUB_TOKEN" ]; then
-  echo -n "${GITHUB_TOKEN}" | gcloud secrets create GITHUB_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}" \
-    2>/dev/null || \
-  echo -n "${GITHUB_TOKEN}" | gcloud secrets versions add GITHUB_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}"
-  echo "✓ GITHUB_TOKEN secret created/updated"
-fi
-
-# Create Slack bot token secret if set
-if [ -n "$SLACK_BOT_TOKEN" ]; then
-  echo -n "${SLACK_BOT_TOKEN}" | gcloud secrets create SLACK_BOT_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}" \
-    2>/dev/null || \
-  echo -n "${SLACK_BOT_TOKEN}" | gcloud secrets versions add SLACK_BOT_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}"
-  echo "✓ SLACK_BOT_TOKEN secret created/updated"
-fi
-
 # Create Git SSH key secret if set
 if [ -n "$GIT_SSH_KEY" ]; then
   echo -n "${GIT_SSH_KEY}" | gcloud secrets create GIT_SSH_KEY \

@@ -8,6 +8,7 @@ dist/
 .DS_Store
 tmp/
 secrets/
+.keys/
 *.key
 *.pem
 service_account.json

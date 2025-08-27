@@ -57,6 +57,7 @@ ENV_FILE="${DIR}/../.env.deploy.yaml"
 if [ ! -f "${ENV_FILE}" ]; then
   echo "Creating environment variables file..."
   cat > "${ENV_FILE}" << EOF
+PROJECT_ID: "${PROJECT_ID}"
 ALLOWED_TOOLS: "${ALLOWED_TOOLS}"
 PERMISSION_MODE: "${PERMISSION_MODE}"
 EOF

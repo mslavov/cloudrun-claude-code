@@ -50,6 +50,9 @@ export class GitService {
       await Promise.race([clonePromise, timeoutPromise]);
       console.log("✓ Repository cloned successfully");
     } catch (error: any) {
+      // Log the actual error for debugging
+      console.error("Git clone failed with error:", error.message);
+      
       // Provide more helpful error messages
       let errorMessage = error.message;
       if (error.message.includes('Could not read from remote repository')) {
@@ -58,6 +61,10 @@ export class GitService {
         errorMessage = 'Repository not found. Check the repository URL and access permissions.';
       } else if (error.message.includes('timed out')) {
         errorMessage = 'Git clone operation timed out. Repository may be too large or network is slow.';
+      } else if (error.message.includes('Permission denied')) {
+        errorMessage = 'SSH key authentication failed. Check SSH key permissions and GitHub access.';
+      } else if (error.message.includes('Host key verification failed')) {
+        errorMessage = 'SSH host key verification failed. This should be handled by StrictHostKeyChecking=no.';
       }
       
       throw new Error(`Failed to clone repository: ${errorMessage}`);

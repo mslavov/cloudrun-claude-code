@@ -238,7 +238,7 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `model` | string | No | - | Specific Claude model to use |
 | `fallbackModel` | string | No | - | Fallback model if primary fails |
 | `useNamedPipe` | boolean | No | true | Use named pipe for prompt delivery |
-| `timeoutMinutes` | number | No | 10 | Process timeout in minutes |
+| `timeoutMinutes` | number | No | 55 | Process timeout in minutes (max 60 per Cloud Run) |
 | `gitRepo` | string | No | - | SSH git repository URL to clone (e.g., `git@github.com:user/repo.git`) |
 | `gitBranch` | string | No | main | Git branch to checkout |
 | `gitDepth` | number | No | 1 | Clone depth for shallow cloning |
@@ -603,12 +603,18 @@ event: error
 data: {"error": "Process timeout", "code": "TIMEOUT"}
 ```
 
-## Rate Limiting
+## Rate Limiting & Concurrency
 
 The service inherits rate limiting from:
-1. Cloud Run concurrency settings
+1. Cloud Run concurrency settings (optimized at 3 concurrent requests per instance)
 2. Anthropic API rate limits
 3. Any configured Cloud Run quotas
+
+### Concurrency Configuration
+- **Recommended**: CONCURRENCY=3 for Claude workloads
+- Each request gets ~1.3GB RAM and 0.66 CPU cores
+- Total capacity: 30 concurrent requests (10 instances × 3 each)
+- Lower concurrency ensures better performance for AI code generation tasks
 
 ## Required Dependencies
 

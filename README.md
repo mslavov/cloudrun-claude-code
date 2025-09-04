@@ -195,7 +195,7 @@ See `examples/` folder for more request examples.
 | `gitRepo` | string | Git repository URL to clone (SSH or HTTPS) | - |
 | `gitBranch` | string | Branch to checkout | "main" |
 | `gitDepth` | number | Clone depth for shallow cloning | 1 |
-| `timeoutMinutes` | number | Process timeout in minutes | 10 |
+| `timeoutMinutes` | number | Process timeout in minutes | 55 |
 
 ### Environment Variables
 
@@ -378,7 +378,7 @@ All deployment scripts are in the `scripts/` folder:
 #### Claude Code SDK hanging in containers
 - The SDK may timeout in containerized environments (Docker/Cloud Run)
 - This is a known issue with the Claude Code SDK in non-interactive environments
-- The service includes timeout handling (55 seconds) to prevent indefinite hangs
+- The service includes timeout handling (default 55 minutes, max 60 minutes per Cloud Run limits)
 - Consider using the official Anthropic API SDK for production deployments if this persists
 
 ### Service not responding

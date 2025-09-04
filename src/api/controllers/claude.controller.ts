@@ -93,7 +93,7 @@ export class ClaudeController {
         systemPrompt,
         appendSystemPrompt,
         permissionMode,
-        timeoutMinutes: timeoutMinutes || 10,
+        timeoutMinutes: timeoutMinutes || 55,
         model,
         fallbackModel,
         claudeEnv: {

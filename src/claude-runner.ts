@@ -168,7 +168,7 @@ export class ClaudeRunner {
     });
 
     // Wait for completion with timeout
-    const timeoutMs = (options.timeoutMinutes || 10) * 60 * 1000;
+    const timeoutMs = (options.timeoutMinutes || 55) * 60 * 1000;
 
     return new Promise((resolve) => {
       let resolved = false;
@@ -287,7 +287,7 @@ export class ClaudeRunner {
     });
 
     // Wait for completion with timeout
-    const timeoutMs = (options.timeoutMinutes || 10) * 60 * 1000;
+    const timeoutMs = (options.timeoutMinutes || 55) * 60 * 1000;
 
     return new Promise((resolve) => {
       let resolved = false;

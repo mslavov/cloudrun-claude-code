@@ -135,9 +135,11 @@ The deployment creates:
 ### Service Resources
 - **CPU:** 2 vCPUs (configurable in .env)
 - **Memory:** 4GB (configurable in .env)
-- **Timeout:** 15 minutes (configurable in .env)
-- **Concurrency:** 10 requests per instance
+- **Timeout:** 60 minutes (configurable in .env, max allowed by Cloud Run)
+- **Concurrency:** 3 requests per instance (optimized for Claude workloads)
 - **Scaling:** 0-10 instances (configurable in .env)
+- **Per-request resources:** ~1.3GB RAM, 0.66 CPU cores
+- **Total capacity:** 30 concurrent requests (10 instances × 3 each)
 
 ### Security
 - **Authentication:** Service requires authentication (no public access)
@@ -233,8 +235,9 @@ gcloud run services describe {service-name} --region={region} --format="value(st
 ### Minimize Costs
 - Set `MIN_INSTANCES=0` to scale to zero when not in use
 - Use appropriate CPU/memory settings
-- Set reasonable timeout values
+- Set reasonable timeout values (but note: longer timeouts mean longer billing)
 - Monitor usage in Cloud Console
+- **Concurrency optimization**: Lower concurrency (3) means better resource utilization per request
 
 ### Free Tier
 Cloud Run offers a generous free tier:

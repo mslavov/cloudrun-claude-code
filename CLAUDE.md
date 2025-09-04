@@ -73,11 +73,16 @@ For deployment, testing, and service account setup commands, refer to DEPLOYMENT
 
 ## Important Implementation Details
 
+### Concurrency Settings
+- **CONCURRENCY=3**: Optimal for Claude workloads (1.3GB RAM, 0.66 CPU per request)
+- Lower concurrency ensures adequate resources for AI code generation tasks
+- Total capacity: 30 concurrent requests (10 instances × 3 each)
+
 ### Claude CLI Environment Setup (claude-runner.ts)
 - Sets `CLAUDE_CODE_ACTION=1` to enable OAuth support
 - Preserves HOME directory for Claude configuration access
 - Passes through CLAUDE_CODE_OAUTH_TOKEN if available
-- Configures timeout (default 10 minutes)
+- Configures timeout (default 55 minutes)
 
 ### Server Security (server.ts)
 - Request size limit: 2MB
@@ -97,7 +102,7 @@ For deployment, testing, and service account setup commands, refer to DEPLOYMENT
 OAuth tokens from Claude subscriptions work with this service. The service sets `CLAUDE_CODE_ACTION=1` for proper OAuth support in the containerized environment.
 
 ### Process Timeouts
-Claude processes have a configurable timeout (default 10 minutes). Long-running tasks may need timeout adjustment via `timeoutMinutes` option.
+Claude processes have a configurable timeout (default 55 minutes, max 60 minutes per Cloud Run limits). Long-running tasks may need timeout adjustment via `timeoutMinutes` option.
 
 ### Named Pipe vs Direct Input
 The service supports two prompt delivery methods:

@@ -18,6 +18,7 @@ export type ClaudeOptions = {
   model?: string;
   permissionMode?: string;
   timeoutMinutes?: number;
+  dangerouslySkipPermissions?: boolean;
 };
 
 export type ClaudeRunResult = {
@@ -53,12 +54,17 @@ export class ClaudeRunner {
   private buildArgs(options: ClaudeOptions): string[] {
     const claudeArgs = [...BASE_ARGS];
 
-    if (options.allowedTools && options.allowedTools.length > 0) {
-      claudeArgs.push("--allowedTools", options.allowedTools.join(","));
+    if (options.dangerouslySkipPermissions) {
+      claudeArgs.push("--dangerously-skip-permissions");
+    } else {
+      if (options.allowedTools && options.allowedTools.length > 0) {
+        claudeArgs.push("--allowedTools", options.allowedTools.join(","));
+      }
+      if (options.disallowedTools && options.disallowedTools.length > 0) {
+        claudeArgs.push("--disallowedTools", options.disallowedTools.join(","));
+      }
     }
-    if (options.disallowedTools && options.disallowedTools.length > 0) {
-      claudeArgs.push("--disallowedTools", options.disallowedTools.join(","));
-    }
+    
     if (options.maxTurns) {
       claudeArgs.push("--max-turns", options.maxTurns.toString());
     }

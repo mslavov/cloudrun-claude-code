@@ -96,6 +96,7 @@ export class ClaudeController {
         timeoutMinutes: timeoutMinutes || 55,
         model,
         fallbackModel,
+        dangerouslySkipPermissions: process.env.DANGEROUSLY_SKIP_PERMISSIONS === 'true',
         claudeEnv: {
           // Pass any additional environment variables
           CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
@@ -129,6 +130,11 @@ export class ClaudeController {
       // Data handler for streaming
       const onData = (line: string) => {
         if (connectionClosed) return;
+
+        // Log Claude output to console if enabled
+        if (process.env.LOG_CLAUDE_OUTPUT === 'true' && line.trim()) {
+          console.log('[CLAUDE OUTPUT]', line);
+        }
 
         try {
           // Try to parse as JSON

@@ -1,9 +1,7 @@
 node_modules/
 dist/
-.env
-.env.local
-.env.deploy
-.env.deploy.yaml
+.env*
+!.env.example
 *.log
 .DS_Store
 tmp/

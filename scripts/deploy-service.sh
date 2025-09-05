@@ -44,6 +44,10 @@ MAX_INSTANCES="${MAX_INSTANCES:-10}"
 ALLOWED_TOOLS="${ALLOWED_TOOLS:-Read,Write,Grep,Bash(npm run test:*),WebSearch}"
 PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
 
+# Advanced configuration
+DANGEROUSLY_SKIP_PERMISSIONS="${DANGEROUSLY_SKIP_PERMISSIONS:-false}"
+LOG_CLAUDE_OUTPUT="${LOG_CLAUDE_OUTPUT:-false}"
+
 # Construct the full image URL
 IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${TAG}"
 
@@ -51,18 +55,20 @@ echo "Deploying Cloud Run service: ${SERVICE_NAME}"
 echo "Image: ${IMAGE_URL}"
 echo "Region: ${REGION}"
 echo "VPC enabled: ${ENABLE_VPC}"
+echo "Skip permissions: ${DANGEROUSLY_SKIP_PERMISSIONS}"
+echo "Log Claude output: ${LOG_CLAUDE_OUTPUT}"
 
-# Create environment variables file if it doesn't exist
+# Create/update environment variables file with latest values
 ENV_FILE="${DIR}/../.env.deploy.yaml"
-if [ ! -f "${ENV_FILE}" ]; then
-  echo "Creating environment variables file..."
-  cat > "${ENV_FILE}" << EOF
+echo "Creating/updating environment variables file..."
+cat > "${ENV_FILE}" << EOF
 PROJECT_ID: "${PROJECT_ID}"
 ALLOWED_TOOLS: "${ALLOWED_TOOLS}"
 PERMISSION_MODE: "${PERMISSION_MODE}"
+DANGEROUSLY_SKIP_PERMISSIONS: "${DANGEROUSLY_SKIP_PERMISSIONS}"
+LOG_CLAUDE_OUTPUT: "${LOG_CLAUDE_OUTPUT}"
 EOF
-  echo "✓ Environment variables file created"
-fi
+echo "✓ Environment variables file created/updated"
 
 # Build deployment command
 DEPLOY_CMD="gcloud run deploy \"${SERVICE_NAME}\" \

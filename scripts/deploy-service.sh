@@ -47,6 +47,7 @@ PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
 # Advanced configuration
 DANGEROUSLY_SKIP_PERMISSIONS="${DANGEROUSLY_SKIP_PERMISSIONS:-false}"
 LOG_CLAUDE_OUTPUT="${LOG_CLAUDE_OUTPUT:-false}"
+CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
 
 # Construct the full image URL
 IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${TAG}"
@@ -57,6 +58,7 @@ echo "Region: ${REGION}"
 echo "VPC enabled: ${ENABLE_VPC}"
 echo "Skip permissions: ${DANGEROUSLY_SKIP_PERMISSIONS}"
 echo "Log Claude output: ${LOG_CLAUDE_OUTPUT}"
+echo "Claude debug: ${CLAUDE_DEBUG}"
 
 # Create/update environment variables file with latest values
 ENV_FILE="${DIR}/../.env.deploy.yaml"
@@ -67,6 +69,7 @@ ALLOWED_TOOLS: "${ALLOWED_TOOLS}"
 PERMISSION_MODE: "${PERMISSION_MODE}"
 DANGEROUSLY_SKIP_PERMISSIONS: "${DANGEROUSLY_SKIP_PERMISSIONS}"
 LOG_CLAUDE_OUTPUT: "${LOG_CLAUDE_OUTPUT}"
+CLAUDE_DEBUG: "${CLAUDE_DEBUG}"
 EOF
 echo "✓ Environment variables file created/updated"
 

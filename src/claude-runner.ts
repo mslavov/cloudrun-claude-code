@@ -19,6 +19,7 @@ export type ClaudeOptions = {
   permissionMode?: string;
   timeoutMinutes?: number;
   dangerouslySkipPermissions?: boolean;
+  debug?: boolean;
 };
 
 export type ClaudeRunResult = {
@@ -64,7 +65,10 @@ export class ClaudeRunner {
         claudeArgs.push("--disallowedTools", options.disallowedTools.join(","));
       }
     }
-    
+    if (options.debug) {
+      claudeArgs.push("--debug");
+    }
+
     if (options.maxTurns) {
       claudeArgs.push("--max-turns", options.maxTurns.toString());
     }

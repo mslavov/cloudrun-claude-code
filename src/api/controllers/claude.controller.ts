@@ -53,7 +53,7 @@ export class ClaudeController {
     }
 
     let workspaceRoot: string;
-    
+
     try {
       // Create workspace or clone repository
       if (gitRepo) {
@@ -74,11 +74,11 @@ export class ClaudeController {
       let additionalEnv: Record<string, string> = {};
       if (gitRepo) {
         const envContent = await this.secretsService.fetchEnvSecret(gitRepo, gitBranch);
-        
+
         if (envContent) {
           // Write to workspace as .env file
           await this.workspaceService.writeEnvFile(workspaceRoot, envContent);
-          
+
           // Parse environment variables
           additionalEnv = this.secretsService.parseEnvContent(envContent);
           console.log(`✓ Loaded ${Object.keys(additionalEnv).length} environment variables`);
@@ -97,6 +97,7 @@ export class ClaudeController {
         model,
         fallbackModel,
         dangerouslySkipPermissions: process.env.DANGEROUSLY_SKIP_PERMISSIONS === 'true',
+        debug: process.env.CLAUDE_DEBUG === 'true',
         claudeEnv: {
           // Pass any additional environment variables
           CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
@@ -176,7 +177,7 @@ export class ClaudeController {
 
     } catch (err: any) {
       console.error("Error:", err.message, err.stack);
-      
+
       // If headers not sent yet, send error response
       if (!res.headersSent) {
         res.status(500).json({ error: err.message });
@@ -184,7 +185,7 @@ export class ClaudeController {
         res.write(`event: error\ndata: ${JSON.stringify({ error: err.message })}\n\n`);
         res.end();
       }
-      
+
       // Clean up workspace if it was created
       if (workspaceRoot!) {
         await this.workspaceService.cleanupWorkspaceNow(workspaceRoot);

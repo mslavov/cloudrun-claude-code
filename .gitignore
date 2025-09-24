@@ -10,6 +10,7 @@ tmp/
 *.pem
 service_account.json
 *_service_account.json
+service_accounts/
 
 # Project management
 .current-project

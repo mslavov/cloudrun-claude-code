@@ -20,7 +20,12 @@ fi
 
 # Set default values if not provided
 SERVICE_ACCOUNT_NAME="${SERVICE_ACCOUNT_NAME:-claude-code-client}"
-KEY_FILE="service_account.json"
+SERVICE_ACCOUNTS_DIR="service_accounts"
+KEY_FILE="${SERVICE_ACCOUNTS_DIR}/${PROJECT_ID}_service_account.json"
+SYMLINK_FILE="service_account.json"
+
+# Create service_accounts directory if it doesn't exist
+mkdir -p ${SERVICE_ACCOUNTS_DIR}
 
 SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
 
@@ -45,14 +50,23 @@ fi
 
 # Create and download the key
 echo -e "${GREEN}Creating and downloading service account key...${NC}"
+echo -e "${YELLOW}Saving to: ${KEY_FILE}${NC}"
 gcloud iam service-accounts keys create ${KEY_FILE} \
     --iam-account=${SERVICE_ACCOUNT_EMAIL} \
     --project=${PROJECT_ID}
 
 if [ -f ${KEY_FILE} ]; then
     echo -e "${GREEN}✓ Service account key downloaded successfully to ${KEY_FILE}${NC}"
+
+    # Create symlink for backward compatibility
+    if [ -L ${SYMLINK_FILE} ] || [ -f ${SYMLINK_FILE} ]; then
+        rm -f ${SYMLINK_FILE}
+    fi
+    ln -s ${KEY_FILE} ${SYMLINK_FILE}
+    echo -e "${GREEN}✓ Created symlink: ${SYMLINK_FILE} -> ${KEY_FILE}${NC}"
+
     echo -e "${YELLOW}⚠️  IMPORTANT: Keep this file secure and never commit it to version control${NC}"
-    echo -e "${YELLOW}The file is already added to .gitignore${NC}"
+    echo -e "${YELLOW}The service_accounts directory is already added to .gitignore${NC}"
 else
     echo -e "${RED}Error: Failed to download service account key${NC}"
     exit 1

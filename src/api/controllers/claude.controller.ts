@@ -55,17 +55,29 @@ export class ClaudeController {
     let workspaceRoot: string;
 
     try {
-      // Create workspace or clone repository
+      // Create workspace
+      workspaceRoot = await this.workspaceService.createWorkspace();
+
+      // Clone repository if provided
       if (gitRepo) {
-        workspaceRoot = await this.workspaceService.createWorkspace();
+        // Check for SSH deployment key
+        let sshKeyPath: string | undefined;
+        const sshKey = await this.secretsService.fetchDeployKey(gitRepo);
+
+        if (sshKey) {
+          console.log(`Using per-repository SSH key for ${gitRepo}`);
+          sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
+        } else {
+          console.log(`No per-repository SSH key found for ${gitRepo}, using global SSH configuration`);
+        }
+
         await this.gitService.cloneRepository({
           gitRepo,
           targetPath: workspaceRoot,
           branch: gitBranch,
-          depth: gitDepth
+          depth: gitDepth,
+          sshKeyPath
         });
-      } else {
-        workspaceRoot = await this.workspaceService.createWorkspace();
       }
 
       await this.workspaceService.createSubdirectory(workspaceRoot, cwdRelative);

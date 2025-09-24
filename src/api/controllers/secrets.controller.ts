@@ -21,8 +21,8 @@ export class SecretsController {
   // List all secrets for an organization/repo
   async listSecrets(req: Request<{}, {}, {}, ListSecretsQuery>, res: Response<ListSecretsResponse>): Promise<void> {
     try {
-      const { org, repo } = req.query;
-      const secrets = await this.secretsService.listSecrets(org, repo);
+      const { org, repo, type } = req.query;
+      const secrets = await this.secretsService.listSecrets(org, repo, type);
       res.json({ secrets });
     } catch (error: any) {
       console.error("Error listing secrets:", error);
@@ -30,11 +30,11 @@ export class SecretsController {
     }
   }
 
-  // Get environment variables for a repo
+  // Get environment variables or SSH key for a repo
   async getSecret(req: Request<{}, {}, {}, GetSecretQuery>, res: Response<GetSecretResponse>): Promise<void> {
     try {
-      const { gitRepo, gitBranch } = req.query;
-      
+      const { gitRepo, gitBranch, type = 'env' } = req.query;
+
       if (!gitRepo) {
         res.status(400).json({
           exists: false,
@@ -43,20 +43,22 @@ export class SecretsController {
         return;
       }
 
-      const envContent = await this.secretsService.fetchEnvSecret(gitRepo, gitBranch);
-      
-      if (envContent) {
+      const secretContent = await this.secretsService.fetchSecret(gitRepo, type, gitBranch);
+
+      if (secretContent) {
         const parsed = this.secretsService.parseGitRepo(gitRepo);
+        const prefix = type === 'ssh' ? 'ssh' : 'env';
         const sanitizedBranch = gitBranch ? gitBranch.replace(/\//g, '__') : '';
-        const secretName = gitBranch && gitBranch !== 'main' && gitBranch !== 'master'
-          ? `env_${parsed?.org}_${parsed?.repo}_${sanitizedBranch}`
-          : `env_${parsed?.org}_${parsed?.repo}`;
-        
+        const secretName = type === 'env' && gitBranch && gitBranch !== 'main' && gitBranch !== 'master'
+          ? `${prefix}_${parsed?.org}_${parsed?.repo}_${sanitizedBranch}`
+          : `${prefix}_${parsed?.org}_${parsed?.repo}`;
+
         res.json({
           exists: true,
           secretName,
-          env: this.secretsService.parseEnvContent(envContent)
-        });
+          env: type === 'env' ? this.secretsService.parseEnvContent(secretContent) : undefined,
+          secretContent: type === 'ssh' ? secretContent : undefined
+        } as any);
       } else {
         res.json({
           exists: false,
@@ -75,18 +77,30 @@ export class SecretsController {
   // Create a new secret
   async createSecret(req: Request<{}, {}, CreateSecretBody>, res: Response<SecretResponse>): Promise<void> {
     try {
-      const { org, repo, branch, envContent } = req.body;
-      
-      if (!org || !repo || !envContent) {
+      const { org, repo, branch, type = 'env', secretContent, envContent } = req.body;
+
+      // Support backward compatibility with envContent
+      const content = secretContent || envContent;
+
+      if (!org || !repo || !content) {
         res.status(400).json({
           success: false,
-          error: "org, repo, and envContent are required"
+          error: "org, repo, and secretContent (or envContent) are required"
         });
         return;
       }
 
-      const result = await this.secretsService.createSecret(org, repo, envContent, branch);
-      
+      // Validate type
+      if (type !== 'env' && type !== 'ssh') {
+        res.status(400).json({
+          success: false,
+          error: "Invalid type. Must be 'env' or 'ssh'"
+        });
+        return;
+      }
+
+      const result = await this.secretsService.createSecret(org, repo, content, type, branch);
+
       if (result.success) {
         res.status(201).json(result);
       } else {
@@ -104,18 +118,30 @@ export class SecretsController {
   // Update an existing secret
   async updateSecret(req: Request<{}, {}, UpdateSecretBody>, res: Response<SecretResponse>): Promise<void> {
     try {
-      const { org, repo, branch, envContent } = req.body;
-      
-      if (!org || !repo || !envContent) {
+      const { org, repo, branch, type = 'env', secretContent, envContent } = req.body;
+
+      // Support backward compatibility with envContent
+      const content = secretContent || envContent;
+
+      if (!org || !repo || !content) {
         res.status(400).json({
           success: false,
-          error: "org, repo, and envContent are required"
+          error: "org, repo, and secretContent (or envContent) are required"
         });
         return;
       }
 
-      const result = await this.secretsService.updateSecret(org, repo, envContent, branch);
-      
+      // Validate type
+      if (type !== 'env' && type !== 'ssh') {
+        res.status(400).json({
+          success: false,
+          error: "Invalid type. Must be 'env' or 'ssh'"
+        });
+        return;
+      }
+
+      const result = await this.secretsService.updateSecret(org, repo, content, type, branch);
+
       if (result.success) {
         res.json(result);
       } else {
@@ -133,8 +159,8 @@ export class SecretsController {
   // Delete a secret
   async deleteSecret(req: Request<{}, {}, {}, DeleteSecretQuery>, res: Response<SecretResponse>): Promise<void> {
     try {
-      const { org, repo, branch } = req.query;
-      
+      const { org, repo, branch, type = 'env' } = req.query;
+
       if (!org || !repo) {
         res.status(400).json({
           success: false,
@@ -143,8 +169,17 @@ export class SecretsController {
         return;
       }
 
-      const result = await this.secretsService.deleteSecret(org, repo, branch);
-      
+      // Validate type
+      if (type !== 'env' && type !== 'ssh') {
+        res.status(400).json({
+          success: false,
+          error: "Invalid type. Must be 'env' or 'ssh'"
+        });
+        return;
+      }
+
+      const result = await this.secretsService.deleteSecret(org, repo, type, branch);
+
       if (result.success) {
         res.json(result);
       } else {

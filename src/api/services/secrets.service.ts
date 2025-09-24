@@ -5,6 +5,8 @@ export interface ParsedRepo {
   repo: string;
 }
 
+export type SecretType = 'env' | 'ssh';
+
 export class SecretsService {
   private client: SecretManagerServiceClient;
 
@@ -18,26 +20,34 @@ export class SecretsService {
   }
 
   // Build hierarchy of secret names to try, from most specific to least
-  private buildSecretHierarchy(org: string, repo: string, branch?: string): string[] {
+  private buildSecretName(org: string, repo: string, type: SecretType = 'env', branch?: string): string[] {
     const secrets: string[] = [];
-    
+    const prefix = type === 'ssh' ? 'ssh' : 'env';
+
+    // SSH secrets don't support branch hierarchy
+    if (type === 'ssh') {
+      secrets.push(`${prefix}_${org}_${repo}`);
+      return secrets;
+    }
+
+    // Environment secrets support branch hierarchy
     if (branch && branch !== 'main' && branch !== 'master') {
       const sanitizedBranch = this.sanitizeBranchName(branch);
-      secrets.push(`env_${org}_${repo}_${sanitizedBranch}`);
-      
+      secrets.push(`${prefix}_${org}_${repo}_${sanitizedBranch}`);
+
       // Add hierarchical paths for branches with slashes
       if (branch.includes('/')) {
         const parts = branch.split('/');
         for (let i = parts.length - 1; i > 0; i--) {
           const partialBranch = parts.slice(0, i).join('__');
-          secrets.push(`env_${org}_${repo}_${partialBranch}`);
+          secrets.push(`${prefix}_${org}_${repo}_${partialBranch}`);
         }
       }
     }
-    
+
     // Add repo default
-    secrets.push(`env_${org}_${repo}`);
-    
+    secrets.push(`${prefix}_${org}_${repo}`);
+
     return secrets;
   }
 
@@ -63,36 +73,37 @@ export class SecretsService {
     return null;
   }
 
-  // Fetch environment secret dynamically based on repository
-  async fetchEnvSecret(gitRepo: string, branch?: string): Promise<string | null> {
+  // Generic method to fetch secrets based on type
+  async fetchSecret(gitRepo: string, type: SecretType = 'env', branch?: string): Promise<string | null> {
     const parsed = this.parseGitRepo(gitRepo);
     if (!parsed) {
       console.warn(`Could not parse repository URL: ${gitRepo}`);
       return null;
     }
-    
+
     const { org, repo } = parsed;
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID;
-    
+
     if (!projectId) {
       console.warn("PROJECT_ID not set, cannot fetch secrets");
       return null;
     }
-    
+
     // Build hierarchical list of secret names to try
-    const secretNames = this.buildSecretHierarchy(org, repo, branch);
-    
-    console.log(`Attempting to fetch environment secret for ${org}/${repo}${branch ? ` (${branch})` : ''}`);
+    const secretNames = this.buildSecretName(org, repo, type, branch);
+
+    const secretTypeLabel = type === 'ssh' ? 'SSH key' : 'environment secret';
+    console.log(`Attempting to fetch ${secretTypeLabel} for ${org}/${repo}${branch && type === 'env' ? ` (${branch})` : ''}`);
     console.log(`Secret hierarchy: ${secretNames.join(' -> ')}`);
-    
+
     for (const secretName of secretNames) {
       try {
         const name = `projects/${projectId}/secrets/${secretName}/versions/latest`;
         console.log(`Trying secret: ${secretName}`);
-        
+
         const [version] = await this.client.accessSecretVersion({ name });
         const payload = version.payload?.data;
-        
+
         if (payload) {
           console.log(`✓ Successfully fetched secret: ${secretName}`);
           return payload.toString();
@@ -105,13 +116,23 @@ export class SecretsService {
         continue;
       }
     }
-    
-    console.log(`No environment secrets found for ${org}/${repo}`);
+
+    console.log(`No ${secretTypeLabel} found for ${org}/${repo}`);
     return null;
   }
 
+  // Backward compatibility wrapper for environment secrets
+  async fetchEnvSecret(gitRepo: string, branch?: string): Promise<string | null> {
+    return this.fetchSecret(gitRepo, 'env', branch);
+  }
+
+  // Fetch SSH deployment key for a repository
+  async fetchDeployKey(gitRepo: string): Promise<string | null> {
+    return this.fetchSecret(gitRepo, 'ssh');
+  }
+
   // List all secrets for an organization/repo
-  async listSecrets(org?: string, repo?: string): Promise<string[]> {
+  async listSecrets(org?: string, repo?: string, type?: SecretType): Promise<string[]> {
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID;
     
     if (!projectId) {
@@ -126,28 +147,39 @@ export class SecretsService {
       const name = secret.name?.split('/').pop();
       if (!name) continue;
       
-      // Filter by org/repo if provided
-      if (name.startsWith('env_')) {
-        if (org && !name.includes(`env_${org}_`)) continue;
-        if (repo && !name.includes(`_${repo}`)) continue;
-        secretNames.push(name);
-      }
+      // Filter by type, org, and repo if provided
+      const isEnvSecret = name.startsWith('env_');
+      const isSshSecret = name.startsWith('ssh_');
+
+      if (!isEnvSecret && !isSshSecret) continue;
+
+      // Filter by type if specified
+      if (type === 'env' && !isEnvSecret) continue;
+      if (type === 'ssh' && !isSshSecret) continue;
+
+      // Filter by org/repo
+      const prefix = isEnvSecret ? 'env_' : 'ssh_';
+      if (org && !name.includes(`${prefix}${org}_`)) continue;
+      if (repo && !name.includes(`_${repo}`)) continue;
+
+      secretNames.push(name);
     }
     
     return secretNames;
   }
 
   // Create a new secret
-  async createSecret(org: string, repo: string, envContent: string, branch?: string): Promise<{ success: boolean; secretName: string; error?: string }> {
+  async createSecret(org: string, repo: string, secretContent: string, type: SecretType = 'env', branch?: string): Promise<{ success: boolean; secretName: string; error?: string }> {
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID;
     
     if (!projectId) {
       return { success: false, secretName: '', error: 'PROJECT_ID not set' };
     }
 
-    const secretName = branch && branch !== 'main' && branch !== 'master' 
-      ? `env_${org}_${repo}_${this.sanitizeBranchName(branch)}`
-      : `env_${org}_${repo}`;
+    const prefix = type === 'ssh' ? 'ssh' : 'env';
+    const secretName = type === 'env' && branch && branch !== 'main' && branch !== 'master'
+      ? `${prefix}_${org}_${repo}_${this.sanitizeBranchName(branch)}`
+      : `${prefix}_${org}_${repo}`;
 
     try {
       const parent = `projects/${projectId}`;
@@ -179,7 +211,7 @@ export class SecretsService {
       await this.client.addSecretVersion({
         parent: secret.name,
         payload: {
-          data: Buffer.from(envContent, 'utf8'),
+          data: Buffer.from(secretContent, 'utf8'),
         },
       });
 
@@ -192,20 +224,21 @@ export class SecretsService {
   }
 
   // Update an existing secret
-  async updateSecret(org: string, repo: string, envContent: string, branch?: string): Promise<{ success: boolean; version?: string; error?: string }> {
+  async updateSecret(org: string, repo: string, secretContent: string, type: SecretType = 'env', branch?: string): Promise<{ success: boolean; version?: string; error?: string }> {
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID;
     
     if (!projectId) {
       return { success: false, error: 'PROJECT_ID not set' };
     }
 
-    const secretName = branch && branch !== 'main' && branch !== 'master' 
-      ? `env_${org}_${repo}_${this.sanitizeBranchName(branch)}`
-      : `env_${org}_${repo}`;
+    const prefix = type === 'ssh' ? 'ssh' : 'env';
+    const secretName = type === 'env' && branch && branch !== 'main' && branch !== 'master'
+      ? `${prefix}_${org}_${repo}_${this.sanitizeBranchName(branch)}`
+      : `${prefix}_${org}_${repo}`;
 
     try {
       const secretPath = `projects/${projectId}/secrets/${secretName}`;
-      
+
       // Check if secret exists
       await this.client.getSecret({ name: secretPath });
       
@@ -213,7 +246,7 @@ export class SecretsService {
       const [version] = await this.client.addSecretVersion({
         parent: secretPath,
         payload: {
-          data: Buffer.from(envContent, 'utf8'),
+          data: Buffer.from(secretContent, 'utf8'),
         },
       });
 
@@ -227,16 +260,17 @@ export class SecretsService {
   }
 
   // Delete a secret
-  async deleteSecret(org: string, repo: string, branch?: string): Promise<{ success: boolean; error?: string }> {
+  async deleteSecret(org: string, repo: string, type: SecretType = 'env', branch?: string): Promise<{ success: boolean; error?: string }> {
     const projectId = process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID;
     
     if (!projectId) {
       return { success: false, error: 'PROJECT_ID not set' };
     }
 
-    const secretName = branch && branch !== 'main' && branch !== 'master' 
-      ? `env_${org}_${repo}_${this.sanitizeBranchName(branch)}`
-      : `env_${org}_${repo}`;
+    const prefix = type === 'ssh' ? 'ssh' : 'env';
+    const secretName = type === 'env' && branch && branch !== 'main' && branch !== 'master'
+      ? `${prefix}_${org}_${repo}_${this.sanitizeBranchName(branch)}`
+      : `${prefix}_${org}_${repo}`;
 
     try {
       const name = `projects/${projectId}/secrets/${secretName}`;

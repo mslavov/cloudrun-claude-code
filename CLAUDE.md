@@ -10,8 +10,9 @@ This is a Cloud Run service that wraps the Claude Code TypeScript SDK to provide
 
 This repository includes comprehensive documentation:
 - **README.md**: Project overview, features, quick start, and API usage examples
-- **DEPLOYMENT.md**: Detailed step-by-step deployment guide with all necessary commands
-- **TESTING.md**: Complete testing guide with local and remote testing instructions
+- **docs/deployment.md**: Detailed step-by-step deployment guide with all necessary commands
+- **docs/testing.md**: Complete testing guide with local and remote testing instructions
+- **docs/index.md**: Documentation index with links to all guides
 
 When working on deployment or testing tasks, read the appropriate guide first for complete instructions and commands.
 
@@ -24,7 +25,7 @@ npm run build     # Compile TypeScript to JavaScript in dist/
 npm start         # Run production server from dist/
 ```
 
-For deployment, testing, and service account setup commands, refer to DEPLOYMENT.md and TESTING.md.
+For deployment, testing, and service account setup commands, refer to docs/deployment.md and docs/testing.md.
 
 ## Architecture
 

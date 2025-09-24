@@ -5,9 +5,21 @@ dist/
 *.log
 .DS_Store
 tmp/
-secrets/
 .keys/
 *.key
 *.pem
 service_account.json
 *_service_account.json
+
+# Project management
+.current-project
+projects/*.env
+!projects/*.env.example
+
+# Secrets directory
+secrets/
+*.secrets
+
+# Legacy secret files (if any remain)
+.env.bugzy
+.env.negbg

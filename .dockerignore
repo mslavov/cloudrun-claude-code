@@ -6,9 +6,26 @@ dist
 README.md
 .env
 .env.local
+.env.*
 .vscode
 .idea
 tmp/
 scripts/
 *.md
 .DS_Store
+
+# Project management
+.current-project
+projects/
+
+# Secrets
+secrets/
+*.secrets
+.env.bugzy
+.env.negbg
+
+# Service account keys
+*.key
+*.pem
+service_account.json
+*_service_account.json

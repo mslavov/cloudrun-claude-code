@@ -54,7 +54,7 @@ if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
   echo "✓ CLAUDE_CODE_OAUTH_TOKEN secret created/updated"
 fi
 
-# Create Git SSH key secret if set
+# Create Git SSH key secret if set (optional - for global Git access)
 if [ -n "$GIT_SSH_KEY" ]; then
   echo -n "${GIT_SSH_KEY}" | gcloud secrets create GIT_SSH_KEY \
     --data-file=- \
@@ -63,7 +63,9 @@ if [ -n "$GIT_SSH_KEY" ]; then
   echo -n "${GIT_SSH_KEY}" | gcloud secrets versions add GIT_SSH_KEY \
     --data-file=- \
     --project="${PROJECT_ID}"
-  echo "✓ GIT_SSH_KEY secret created/updated"
+  echo "✓ GIT_SSH_KEY secret created/updated (global SSH key)"
+else
+  echo "ℹ No GIT_SSH_KEY provided - service will use per-repository SSH keys managed via API"
 fi
 
 echo "All secrets have been processed successfully"

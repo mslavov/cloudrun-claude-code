@@ -210,10 +210,10 @@ See `examples/` folder for more request examples.
 - `ALLOWED_TOOLS`: Comma-separated list of allowed tools
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
 
-**Git Repository Support:**
-- `GIT_SSH_KEY`: SSH private key for cloning private repositories
-  - Required when using `gitRepo` parameter with SSH URLs
-  - See Git Repository Setup section below
+**Git Repository Support (Optional):**
+- `GIT_SSH_KEY`: Global SSH private key for cloning private repositories
+  - Optional - the service supports per-repository SSH keys via API
+  - See Git Repository Setup section for both approaches
 
 ### Tool Permissions
 
@@ -227,7 +227,41 @@ Examples:
 
 The service can clone and work with git repositories during request execution. This is useful for analyzing codebases, running tests, or making changes to existing projects.
 
-### Setting up SSH Key for Private Repositories
+### SSH Key Management Options
+
+The service supports two approaches for SSH authentication with private repositories:
+
+1. **Per-Repository SSH Keys (Recommended)**: Managed via the API, providing better security isolation. Each repository can have its own SSH key stored in Google Secret Manager.
+
+2. **Global SSH Key (Optional)**: A single SSH key for all repositories, useful for simpler setups or backward compatibility.
+
+### Per-Repository SSH Keys (Recommended)
+
+Use the SSH Key Management API to manage repository-specific deploy keys:
+
+```bash
+# Create a new SSH key for a repository
+curl -X POST https://your-service-url/api/ssh-keys/create \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "myorg",
+    "repo": "myrepo",
+    "keyName": "claude-deploy-key"
+  }'
+
+# List SSH keys for a repository
+curl https://your-service-url/api/ssh-keys/list?org=myorg&repo=myrepo
+
+# Get SSH key details
+curl https://your-service-url/api/ssh-keys/get?org=myorg&repo=myrepo&keyId=123456
+
+# Delete an SSH key
+curl -X DELETE "https://your-service-url/api/ssh-keys/delete?org=myorg&repo=myrepo&keyId=123456"
+```
+
+When using per-repository keys, the service automatically selects the appropriate key when cloning repositories.
+
+### Global SSH Key Setup (Optional)
 
 #### Automatic Setup (GitHub)
 

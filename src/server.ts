@@ -49,28 +49,28 @@ function validateEnvironment() {
   }
 }
 
-// Fix SSH key permissions if mounted
+// Setup global SSH key if mounted (optional - per-repository keys are preferred)
 function fixSshKeyPermissions() {
   const mountedKeyPath = "/home/appuser/.ssh/id_rsa";
   const writableKeyPath = "/tmp/ssh_key";
-  
+
   try {
     if (fs.existsSync(mountedKeyPath)) {
-      console.log(`Found mounted SSH key at ${mountedKeyPath}`);
-      
+      console.log(`Found global SSH key mounted at ${mountedKeyPath}`);
+
       // Copy the key to a writable location
       const keyContent = fs.readFileSync(mountedKeyPath, 'utf8');
       fs.writeFileSync(writableKeyPath, keyContent, { mode: 0o600 });
-      console.log(`✓ SSH key copied to ${writableKeyPath} with correct permissions`);
-      
+      console.log(`✓ Global SSH key copied to ${writableKeyPath} with correct permissions`);
+
       // Update Git SSH command to use the writable key
       execSync(`git config --global core.sshCommand "ssh -i ${writableKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"`, { stdio: 'pipe' });
-      console.log("✓ Git SSH command updated to use writable key");
+      console.log("✓ Git configured to use global SSH key");
     } else {
-      console.log("No SSH key found at " + mountedKeyPath);
+      console.log("ℹ No global SSH key mounted - using per-repository SSH keys");
     }
   } catch (error) {
-    console.error("Warning: Could not setup SSH key:", error);
+    console.error("Warning: Could not setup global SSH key:", error);
   }
 }
 

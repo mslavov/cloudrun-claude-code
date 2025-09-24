@@ -97,6 +97,29 @@ For deployment, testing, and service account setup commands, refer to docs/deplo
 - Claude installation moved to /opt for shared access
 - Symlinks created for user home directory access
 
+## SSH Key Management
+
+The service supports two approaches for SSH authentication with private Git repositories:
+
+### 1. Per-Repository SSH Keys (Recommended)
+- Managed via the SSH Key Management API endpoints
+- Each repository can have its own SSH key stored in Google Secret Manager
+- Keys are fetched dynamically when cloning repositories
+- Better security isolation between projects
+- No deployment-time configuration needed
+
+### 2. Global SSH Key (Optional)
+- Single SSH key mounted at `/home/appuser/.ssh/id_rsa`
+- Set via `GIT_SSH_KEY` environment variable
+- Applied to all Git operations globally
+- Useful for simpler setups or backward compatibility
+- Configured during deployment via `scripts/gen_key.sh` and `scripts/create-secrets.sh`
+
+The service automatically detects which approach to use:
+- If a repository has a per-repo SSH key, it uses that
+- Otherwise, falls back to the global SSH key if mounted
+- If neither is available, assumes public repository access
+
 ## Common Issues
 
 ### OAuth Token Setup

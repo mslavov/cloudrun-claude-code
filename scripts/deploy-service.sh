@@ -97,10 +97,13 @@ if gcloud secrets describe CLAUDE_CODE_OAUTH_TOKEN --project="${PROJECT_ID}" &>/
   --set-secrets=\"CLAUDE_CODE_OAUTH_TOKEN=CLAUDE_CODE_OAUTH_TOKEN:latest\""
 fi
 
-# Mount Git SSH key if available
+# Mount Git SSH key if available (optional - for global Git access)
 if gcloud secrets describe GIT_SSH_KEY --project="${PROJECT_ID}" &>/dev/null; then
+  echo "ℹ GIT_SSH_KEY secret found - mounting as global SSH key"
   DEPLOY_CMD="${DEPLOY_CMD} \
   --set-secrets=\"/home/appuser/.ssh/id_rsa=GIT_SSH_KEY:latest\""
+else
+  echo "ℹ No GIT_SSH_KEY secret found - service will use per-repository SSH keys"
 fi
 
 DEPLOY_CMD="${DEPLOY_CMD}"

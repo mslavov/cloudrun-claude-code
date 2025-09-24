@@ -49,7 +49,25 @@ claude setup-token
 CLAUDE_CODE_OAUTH_TOKEN=<your-token>
 ```
 
-### 3. Configure Google Cloud
+### 3. Configure SSH Key (Optional)
+
+The service supports two approaches for SSH authentication with private Git repositories:
+
+1. **Per-Repository SSH Keys (Recommended)**: Managed via the API after deployment
+2. **Global SSH Key (Optional)**: Set up before deployment for all repositories
+
+To set up a global SSH key (optional):
+```bash
+# Generate and configure an SSH key for GitHub
+./scripts/gen_key.sh
+
+# This adds GIT_SSH_KEY to your .env file
+# The key will be deployed as a secret in step 5
+```
+
+Skip this step if you plan to use per-repository SSH keys via the API.
+
+### 4. Configure Google Cloud
 
 Edit the `.env` file with your Google Cloud settings:
 
@@ -59,7 +77,7 @@ REGION=us-central1  # or your preferred region
 SERVICE_NAME=claude-code-service
 ```
 
-### 4. Run Setup Script
+### 5. Run Setup Script
 
 The setup script handles all Google Cloud configuration automatically:
 
@@ -72,7 +90,7 @@ The setup script handles all Google Cloud configuration automatically:
 ./scripts/setup-project.sh
 ```
 
-### 5. Deploy the Service
+### 6. Deploy the Service
 
 ```bash
 # Create/update secrets in Secret Manager
@@ -93,7 +111,7 @@ The setup script handles all Google Cloud configuration automatically:
 
 The deployment script will output your service URL. Note: The service now requires authentication.
 
-### 6. Test the Deployment
+### 7. Test the Deployment
 
 #### Using gcloud authentication (for developers)
 ```bash

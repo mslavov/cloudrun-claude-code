@@ -19,6 +19,7 @@ Using the API:
 ```bash
 curl -X POST "https://your-service-url/api/secrets" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "org": "myorg",
     "repo": "myrepo",
@@ -66,6 +67,9 @@ All secret management endpoints now support a `type` parameter:
 
 ```http
 POST /api/secrets
+Content-Type: application/json
+Authorization: Bearer TOKEN
+
 {
   "org": "myorg",
   "repo": "myrepo",
@@ -78,22 +82,24 @@ POST /api/secrets
 
 ```http
 GET /api/secrets?type=ssh&org=myorg
+Authorization: Bearer TOKEN
 ```
 
 ### Get SSH Key
 
 ```http
-GET /api/secrets/get?gitRepo=git@github.com:myorg/myrepo.git&type=ssh
+GET /api/secrets/ssh_myorg_myrepo
+Authorization: Bearer TOKEN
 ```
 
 ### Update SSH Key
 
 ```http
-PUT /api/secrets
+PUT /api/secrets/ssh_myorg_myrepo
+Content-Type: application/json
+Authorization: Bearer TOKEN
+
 {
-  "org": "myorg",
-  "repo": "myrepo",
-  "type": "ssh",
   "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----..."
 }
 ```
@@ -101,7 +107,8 @@ PUT /api/secrets
 ### Delete SSH Key
 
 ```http
-DELETE /api/secrets?org=myorg&repo=myrepo&type=ssh
+DELETE /api/secrets/ssh_myorg_myrepo
+Authorization: Bearer TOKEN
 ```
 
 ## Security Notes

@@ -22,7 +22,14 @@ app.get("/healthz", healthController.healthCheck.bind(healthController));
 // Claude execution route
 app.post("/run", claudeController.runClaude.bind(claudeController));
 
-// Secret management routes
+// RESTful Secret management routes (new)
+app.get("/api/secrets", secretsController.list.bind(secretsController));
+app.get("/api/secrets/:id", secretsController.get.bind(secretsController));
+app.post("/api/secrets", secretsController.create.bind(secretsController));
+app.put("/api/secrets/:id", secretsController.update.bind(secretsController));
+app.delete("/api/secrets/:id", secretsController.delete.bind(secretsController));
+
+// Legacy Secret management routes (backward compatibility - not documented)
 app.get("/api/secrets/list", secretsController.listSecrets.bind(secretsController));
 app.get("/api/secrets/get", secretsController.getSecret.bind(secretsController));
 app.post("/api/secrets/create", secretsController.createSecret.bind(secretsController));

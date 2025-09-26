@@ -108,13 +108,14 @@ curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
 
 The service provides a RESTful API for managing environment secrets that are automatically loaded when cloning git repositories.
 
-#### GET /api/secrets/list
+#### GET /api/secrets
 
-List all environment secrets, optionally filtered by organization and repository.
+List all secrets, optionally filtered by organization, repository, and type.
 
 **Query Parameters:**
 - `org` (string, optional): Filter by organization name
 - `repo` (string, optional): Filter by repository name
+- `type` (string, optional): Secret type - 'env' or 'ssh' (defaults to all types)
 
 **Response:**
 ```json
@@ -122,24 +123,41 @@ List all environment secrets, optionally filtered by organization and repository
   "secrets": [
     "env_myorg_myrepo",
     "env_myorg_myrepo_staging",
-    "env_myorg_myrepo_customers__acme__main"
+    "env_myorg_myrepo_customers__acme__main",
+    "ssh_myorg_myrepo"
   ]
 }
 ```
 
-#### GET /api/secrets/get
+**Example:**
+```bash
+# List all secrets
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://YOUR-SERVICE-URL/api/secrets"
 
-Fetch environment variables for a repository. Uses hierarchical resolution to find the most specific secret.
+# List only environment secrets for an org
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://YOUR-SERVICE-URL/api/secrets?type=env&org=myorg"
+```
 
-**Query Parameters:**
-- `gitRepo` (string, required): Git repository URL (e.g., `git@github.com:org/repo.git`)
-- `gitBranch` (string, optional): Branch name (supports slashes like `customers/acme/main`)
+#### GET /api/secrets/:id
+
+Get a specific secret by its ID.
+
+**Path Parameters:**
+- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
+  - Examples: `env_myorg_myrepo`, `ssh_myorg_backend`, `env_myorg_api_staging`
 
 **Response:**
+
+For environment secrets (type=env):
 ```json
 {
-  "exists": true,
-  "secretName": "env_myorg_myrepo_customers__acme",
+  "id": "env_myorg_myrepo_staging",
+  "type": "env",
+  "org": "myorg",
+  "repo": "myrepo",
+  "branch": "staging",
   "env": {
     "DATABASE_URL": "postgres://...",
     "API_KEY": "..."
@@ -147,26 +165,53 @@ Fetch environment variables for a repository. Uses hierarchical resolution to fi
 }
 ```
 
-**Hierarchical Resolution:**
-For branch `customers/acme/main`, the service tries in order:
-1. `env_org_repo_customers__acme__main` (most specific)
-2. `env_org_repo_customers__acme` (parent path)
-3. `env_org_repo_customers` (root path)
-4. `env_org_repo` (repository default)
+For SSH keys (type=ssh):
+```json
+{
+  "id": "ssh_myorg_myrepo",
+  "type": "ssh",
+  "org": "myorg",
+  "repo": "myrepo",
+  "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+}
+```
 
-#### POST /api/secrets/create
+**Example:**
+```bash
+# Get environment variables for main branch
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo"
 
-Create a new environment secret.
+# Get SSH key
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo"
+
+# Get branch-specific environment
+curl -H "Authorization: Bearer $TOKEN" \
+  "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_customers__acme"
+```
+
+#### POST /api/secrets
+
+Create a new secret.
 
 **Request Body:**
 ```json
 {
   "org": "myorg",
   "repo": "myrepo",
+  "type": "env",
   "branch": "customers/acme/main",
-  "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
+  "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
 }
 ```
+
+**Parameters:**
+- `org` (string, required): Organization name
+- `repo` (string, required): Repository name
+- `type` (string, optional): Secret type - 'env' or 'ssh' (defaults to 'env')
+- `branch` (string, optional): Branch name for environment secrets
+- `secretContent` (string, required): The secret content (environment variables or SSH key)
 
 **Response:**
 ```json
@@ -176,17 +221,47 @@ Create a new environment secret.
 }
 ```
 
-#### PUT /api/secrets/update
+**Status Codes:**
+- `201 Created`: Secret successfully created
+- `400 Bad Request`: Invalid parameters
 
-Update an existing environment secret.
+**Examples:**
+
+```bash
+# Create environment secret
+curl -X POST "https://YOUR-SERVICE-URL/api/secrets" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "myorg",
+    "repo": "backend",
+    "type": "env",
+    "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
+  }'
+
+# Create SSH deployment key
+curl -X POST "https://YOUR-SERVICE-URL/api/secrets" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "org": "myorg",
+    "repo": "backend",
+    "type": "ssh",
+    "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+  }'
+```
+
+#### PUT /api/secrets/:id
+
+Update an existing secret.
+
+**Path Parameters:**
+- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
 
 **Request Body:**
 ```json
 {
-  "org": "myorg",
-  "repo": "myrepo",
-  "branch": "staging",
-  "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
+  "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
 }
 ```
 
@@ -198,20 +273,45 @@ Update an existing environment secret.
 }
 ```
 
-#### DELETE /api/secrets/delete
+**Example:**
+```bash
+# Update environment variables
+curl -X PUT "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_staging" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "secretContent": "DATABASE_URL=postgres://new...\nAPI_KEY=sk-new..."
+  }'
 
-Delete an environment secret.
+# Update SSH key
+curl -X PUT "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo" \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...new key...\n-----END OPENSSH PRIVATE KEY-----"
+  }'
+```
 
-**Query Parameters:**
-- `org` (string, required): Organization name
-- `repo` (string, required): Repository name
-- `branch` (string, optional): Branch name
+#### DELETE /api/secrets/:id
+
+Delete a secret.
+
+**Path Parameters:**
+- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
 
 **Response:**
-```json
-{
-  "success": true
-}
+- `204 No Content`: Secret successfully deleted
+- `404 Not Found`: Secret does not exist
+
+**Example:**
+```bash
+# Delete environment secret
+curl -X DELETE "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_staging" \
+  -H "Authorization: Bearer $TOKEN"
+
+# Delete SSH key
+curl -X DELETE "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo" \
+  -H "Authorization: Bearer $TOKEN"
 ```
 
 ### POST /run
@@ -716,22 +816,26 @@ This allows you to define common environment variables at higher levels and over
 
 ```bash
 # Create repository-level secret
-curl -X POST https://YOUR-SERVICE-URL/api/secrets/create \
+curl -X POST https://YOUR-SERVICE-URL/api/secrets \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "org": "mycompany",
     "repo": "backend",
-    "envContent": "DATABASE_URL=postgres://prod...\nAPI_KEY=sk-prod..."
+    "type": "env",
+    "secretContent": "DATABASE_URL=postgres://prod...\nAPI_KEY=sk-prod..."
   }'
 
 # Create customer-specific secret
-curl -X POST https://YOUR-SERVICE-URL/api/secrets/create \
+curl -X POST https://YOUR-SERVICE-URL/api/secrets \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
   -d '{
     "org": "mycompany",
     "repo": "backend",
+    "type": "env",
     "branch": "customers/acme",
-    "envContent": "DATABASE_URL=postgres://acme...\nCUSTOMER_ID=acme"
+    "secretContent": "DATABASE_URL=postgres://acme...\nCUSTOMER_ID=acme"
   }'
 
 # The service will automatically inherit from parent levels

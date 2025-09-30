@@ -25,6 +25,17 @@ export class GitService {
     return !!gitRepo.match(/^(git@|https?:\/\/)/);
   }
 
+  // Convert HTTPS GitHub URL to SSH format
+  convertHttpsToSsh(httpsUrl: string): string {
+    // Match: https://github.com/owner/repo or https://github.com/owner/repo.git
+    const match = httpsUrl.match(/https?:\/\/github\.com\/([^\/]+)\/([^\/]+?)(\.git)?$/);
+    if (match) {
+      const [, owner, repo] = match;
+      return `git@github.com:${owner}/${repo}.git`;
+    }
+    return httpsUrl;
+  }
+
   // Clone a git repository
   async cloneRepository(options: GitCloneOptions): Promise<void> {
     const { gitRepo, targetPath, branch = 'main', depth = 1, sshKeyPath } = options;
@@ -33,7 +44,10 @@ export class GitService {
       throw new Error("Invalid git repository URL format. Use SSH (git@...) or HTTPS format.");
     }
 
-    console.log(`Cloning repository: ${gitRepo} (branch: ${branch}, depth: ${depth})`);
+    const isHttps = gitRepo.startsWith('http://') || gitRepo.startsWith('https://');
+    const isSsh = gitRepo.startsWith('git@');
+
+    console.log(`Cloning repository: ${gitRepo} (branch: ${branch}, depth: ${depth}, protocol: ${isHttps ? 'HTTPS' : 'SSH'})`);
     if (sshKeyPath) {
       console.log(`Using SSH key: ${sshKeyPath}`);
     }
@@ -47,9 +61,15 @@ export class GitService {
         trimmed: false,
       });
 
-      // Configure SSH key if provided
-      if (sshKeyPath) {
+      // Configure SSH key if provided and using SSH protocol
+      if (sshKeyPath && isSsh) {
         git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      // For HTTPS URLs, disable credential prompts to avoid hanging on auth requests
+      if (isHttps) {
+        git.env('GIT_TERMINAL_PROMPT', '0');
+        git.env('GIT_ASKPASS', 'echo');
       }
 
       // Set timeout for git operations (30 seconds)

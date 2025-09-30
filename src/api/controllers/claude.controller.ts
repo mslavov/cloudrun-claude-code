@@ -62,22 +62,44 @@ export class ClaudeController {
 
       // Clone repository if provided
       if (gitRepo) {
-        // Check for SSH deployment key
+        // Check for SSH deployment key - works for both SSH and HTTPS URLs
         let sshKeyPath: string | undefined;
+        let repoUrlToUse = gitRepo;
+
         const sshKey = await this.secretsService.fetchDeployKey(gitRepo);
 
         if (sshKey) {
-          console.log(`Using per-repository SSH key for ${gitRepo}`);
-          sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
+          console.log(`✓ Found SSH key for ${gitRepo} (${sshKey.length} bytes)`);
+
+          try {
+            sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
+            console.log(`✓ SSH key written to: ${sshKeyPath}`);
+          } catch (error: any) {
+            console.error(`Failed to write SSH key: ${error.message}`);
+            throw error;
+          }
+
+          // Convert HTTPS URLs to SSH format if we have an SSH key
+          if (gitRepo.startsWith('http://') || gitRepo.startsWith('https://')) {
+            repoUrlToUse = this.gitService.convertHttpsToSsh(gitRepo);
+            console.log(`✓ Converted HTTPS URL to SSH format: ${gitRepo} -> ${repoUrlToUse}`);
+          }
         } else {
-          console.log(`No per-repository SSH key found for ${gitRepo}, using global SSH configuration`);
+          console.log(`No per-repository SSH key found for ${gitRepo}`);
+
+          // For SSH URLs without a key, this will fail
+          if (gitRepo.startsWith('git@')) {
+            console.log(`SSH URL requires authentication but no SSH key available`);
+          } else {
+            console.log(`Attempting public HTTPS clone`);
+          }
         }
 
         // Clone into 'repo' subdirectory to avoid conflict with existing workspace directory
         const repoPath = path.join(workspaceRoot, 'repo');
 
         await this.gitService.cloneRepository({
-          gitRepo,
+          gitRepo: repoUrlToUse,
           targetPath: repoPath,
           branch: gitBranch,
           depth: gitDepth,

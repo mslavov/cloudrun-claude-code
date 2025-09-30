@@ -32,13 +32,26 @@ export class WorkspaceService {
     // Create .ssh directory with restricted permissions
     await fs.mkdir(sshDir, { recursive: true, mode: 0o700 });
 
+    // Trim any extra whitespace and ensure proper format
+    let keyContent = key.trim();
+
+    // Validate SSH key format
+    if (!keyContent.includes('BEGIN') || !keyContent.includes('PRIVATE KEY')) {
+      throw new Error('Invalid SSH key format: Missing BEGIN/PRIVATE KEY markers');
+    }
+
+    // Ensure proper line endings (replace any \r\n or \r with \n)
+    keyContent = keyContent.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
     // Ensure the key ends with a newline
-    const keyContent = key.endsWith('\n') ? key : key + '\n';
+    if (!keyContent.endsWith('\n')) {
+      keyContent += '\n';
+    }
 
     // Write the key file with restricted permissions
     await fs.writeFile(keyPath, keyContent, { mode: 0o600 });
 
-    console.log(`✓ SSH key written to ${keyPath}`);
+    console.log(`✓ SSH key written to ${keyPath} (${keyContent.length} bytes)`);
     return keyPath;
   }
 

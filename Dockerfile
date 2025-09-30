@@ -12,8 +12,11 @@ FROM node:20-bookworm-slim
 WORKDIR /app
 
 # Install system dependencies needed for Claude Code SDK
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash git ripgrep ca-certificates curl openssh-client \
+# Enable backports to get OpenSSH 10.0 (supports Ed25519 PKCS#8 format keys)
+RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/backports.list && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    bash git ripgrep ca-certificates curl \
+    openssh-client/bookworm-backports \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code globally via npm (always gets latest version)

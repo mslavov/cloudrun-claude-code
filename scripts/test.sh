@@ -216,7 +216,9 @@ test_remote() {
   
   # Health check
   echo -e "\n1. Health Check:"
-  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" "${SERVICE_URL}/health")
+  HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" \
+    -H "Authorization: Bearer ${AUTH_TOKEN}" \
+    "${SERVICE_URL}/health")
   if [ "$HTTP_CODE" = "200" ]; then
     print_success "Health check passed"
   else
@@ -234,11 +236,31 @@ test_remote() {
       "allowedTools": ["Write"],
       "permissionMode": "acceptEdits"
     }' 2>&1 | head -n 10)
-  
+
   if echo "$RESPONSE" | grep -q "data:"; then
     print_success "Main endpoint test successful"
   else
     print_error "Main endpoint test failed"
+  fi
+
+  # Test git repository cloning
+  echo -e "\n3. Testing git repository cloning:"
+  RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${AUTH_TOKEN}" \
+    -d '{
+      "prompt": "List the files in this repository and tell me what this project does",
+      "gitRepo": "https://github.com/agent-forge-org/f65adaf3-fc88-4aad-95e0-fd022f43fded-notion-database-viewer",
+      "gitBranch": "main",
+      "maxTurns": 2
+    }' 2>&1 | head -n 20)
+
+  # Check for successful clone by looking for session init and file listing activity
+  if echo "$RESPONSE" | grep -q '"type":"system"' && echo "$RESPONSE" | grep -q '"type":"assistant"'; then
+    print_success "Git repository test successful"
+  else
+    print_error "Git repository test failed"
+    echo "$RESPONSE"
   fi
 }
 
@@ -335,7 +357,20 @@ curl -N -X POST http://localhost:8080/run \
     "permissionMode": "bypassPermissions"
   }'
 
-6. FOR CLOUD RUN (with auth)
+6. WITH GIT REPOSITORY
+---------------------
+curl -N -X POST http://localhost:8080/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "List the files and explain what this project does",
+    "gitRepo": "https://github.com/owner/repo",
+    "gitBranch": "main",
+    "maxTurns": 3,
+    "allowedTools": ["Read", "Grep", "Bash(ls:*)"],
+    "permissionMode": "acceptEdits"
+  }'
+
+7. FOR CLOUD RUN (with auth)
 ----------------------------
 AUTH_TOKEN=$(gcloud auth print-identity-token)
 curl -N -X POST https://your-service-url/run \

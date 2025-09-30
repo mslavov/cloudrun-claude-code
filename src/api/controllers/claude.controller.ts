@@ -1,4 +1,5 @@
 import { Request, Response } from "express";
+import path from "path";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "../services/git.service.js";
 import { SecretsService } from "../services/secrets.service.js";
@@ -72,13 +73,19 @@ export class ClaudeController {
           console.log(`No per-repository SSH key found for ${gitRepo}, using global SSH configuration`);
         }
 
+        // Clone into 'repo' subdirectory to avoid conflict with existing workspace directory
+        const repoPath = path.join(workspaceRoot, 'repo');
+
         await this.gitService.cloneRepository({
           gitRepo,
-          targetPath: workspaceRoot,
+          targetPath: repoPath,
           branch: gitBranch,
           depth: gitDepth,
           sshKeyPath
         });
+
+        // Update workspaceRoot to point to cloned repository for Claude execution
+        workspaceRoot = repoPath;
       }
 
       await this.workspaceService.createSubdirectory(workspaceRoot, cwdRelative);

@@ -52,7 +52,8 @@ export class ClaudeController {
       return;
     }
 
-    let workspaceRoot: string;
+    let workspaceRoot: string | undefined;
+    let cleanedUp = false;
 
     try {
       // Create workspace
@@ -198,13 +199,14 @@ export class ClaudeController {
         res.end();
       }
 
-      // Clean up workspace if it was created
-      if (workspaceRoot!) {
+      // Clean up workspace immediately on error
+      if (workspaceRoot) {
         await this.workspaceService.cleanupWorkspaceNow(workspaceRoot);
+        cleanedUp = true;
       }
     } finally {
-      // Clean up workspace after a delay for successful runs
-      if (workspaceRoot!) {
+      // Only schedule delayed cleanup if not already cleaned up
+      if (workspaceRoot && !cleanedUp) {
         this.workspaceService.cleanupWorkspace(workspaceRoot, 5000);
       }
     }

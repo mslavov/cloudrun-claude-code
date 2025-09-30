@@ -2,18 +2,15 @@ import { Request, Response } from "express";
 import path from "path";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "../services/git.service.js";
-import { SecretsService } from "../services/secrets.service.js";
 import { WorkspaceService } from "../services/workspace.service.js";
 import { RunRequest } from "../types/request.types.js";
 
 export class ClaudeController {
   private gitService: GitService;
-  private secretsService: SecretsService;
   private workspaceService: WorkspaceService;
 
   constructor() {
     this.gitService = new GitService();
-    this.secretsService = new SecretsService();
     this.workspaceService = new WorkspaceService();
   }
 
@@ -34,7 +31,10 @@ export class ClaudeController {
       gitRepo,
       gitBranch = "main",
       gitDepth = 1,
-      timeoutMinutes
+      timeoutMinutes,
+      environmentSecrets = {},
+      sshKey,
+      metadata
     } = req.body || {};
 
     console.log("Request body:", {
@@ -44,7 +44,10 @@ export class ClaudeController {
       hasSystemPrompt: !!systemPrompt,
       useNamedPipe,
       gitRepo,
-      gitBranch
+      gitBranch,
+      hasEnvironmentSecrets: Object.keys(environmentSecrets).length > 0,
+      hasSshKey: !!sshKey,
+      hasMetadata: !!metadata
     });
 
     if (!prompt) {
@@ -62,14 +65,12 @@ export class ClaudeController {
 
       // Clone repository if provided
       if (gitRepo) {
-        // Check for SSH deployment key - works for both SSH and HTTPS URLs
+        // Use SSH key from payload (provided by Agent Forge)
         let sshKeyPath: string | undefined;
         let repoUrlToUse = gitRepo;
 
-        const sshKey = await this.secretsService.fetchDeployKey(gitRepo);
-
         if (sshKey) {
-          console.log(`✓ Found SSH key for ${gitRepo} (${sshKey.length} bytes)`);
+          console.log(`✓ SSH key provided in payload (${sshKey.length} bytes)`);
 
           try {
             sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
@@ -85,7 +86,7 @@ export class ClaudeController {
             console.log(`✓ Converted HTTPS URL to SSH format: ${gitRepo} -> ${repoUrlToUse}`);
           }
         } else {
-          console.log(`No per-repository SSH key found for ${gitRepo}`);
+          console.log(`No SSH key provided in payload`);
 
           // For SSH URLs without a key, this will fail
           if (gitRepo.startsWith('git@')) {
@@ -112,19 +113,15 @@ export class ClaudeController {
 
       await this.workspaceService.createSubdirectory(workspaceRoot, cwdRelative);
 
-      // Load environment secrets dynamically if gitRepo is provided
-      let additionalEnv: Record<string, string> = {};
-      if (gitRepo) {
-        const envContent = await this.secretsService.fetchEnvSecret(gitRepo, gitBranch);
+      // Use environment secrets from payload (provided by Agent Forge)
+      if (Object.keys(environmentSecrets).length > 0) {
+        console.log(`✓ Using ${Object.keys(environmentSecrets).length} environment secrets from payload`);
 
-        if (envContent) {
-          // Write to workspace as .env file
-          await this.workspaceService.writeEnvFile(workspaceRoot, envContent);
-
-          // Parse environment variables
-          additionalEnv = this.secretsService.parseEnvContent(envContent);
-          console.log(`✓ Loaded ${Object.keys(additionalEnv).length} environment variables`);
-        }
+        // Optionally write to .env file for applications that expect it
+        const envContent = Object.entries(environmentSecrets)
+          .map(([key, value]) => `${key}=${value}`)
+          .join('\n');
+        await this.workspaceService.writeEnvFile(workspaceRoot, envContent);
       }
 
       // Build options for Claude runner
@@ -143,7 +140,7 @@ export class ClaudeController {
         claudeEnv: {
           // Pass any additional environment variables
           CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
-          ...additionalEnv
+          ...environmentSecrets
         }
       };
 

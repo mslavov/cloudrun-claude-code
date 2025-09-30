@@ -14,4 +14,7 @@ export interface RunRequest {
   gitBranch?: string;
   gitDepth?: number;
   timeoutMinutes?: number;
+  environmentSecrets?: Record<string, string>;
+  sshKey?: string;
+  metadata?: Record<string, any>;
 }

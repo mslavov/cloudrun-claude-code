@@ -88,6 +88,9 @@ export class ClaudeRunner {
       claudeArgs.push("--permission-mode", options.permissionMode);
     }
 
+    // Explicitly load project-level MCP configuration
+    claudeArgs.push("--mcp-config", ".mcp.json");
+
     return claudeArgs;
   }
 

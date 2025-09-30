@@ -4,7 +4,6 @@ import { execSync } from "child_process";
 import fs from "fs";
 import { HealthController } from "./api/controllers/health.controller.js";
 import { ClaudeController } from "./api/controllers/claude.controller.js";
-import { SecretsController } from "./api/controllers/secrets.controller.js";
 
 const app = express();
 app.use(bodyParser.json({ limit: "2mb" }));
@@ -12,7 +11,6 @@ app.use(bodyParser.json({ limit: "2mb" }));
 // Initialize controllers
 const healthController = new HealthController();
 const claudeController = new ClaudeController();
-const secretsController = new SecretsController();
 
 // Health routes
 app.get("/", healthController.basicHealth.bind(healthController));
@@ -22,19 +20,6 @@ app.get("/healthz", healthController.healthCheck.bind(healthController));
 // Claude execution route
 app.post("/run", claudeController.runClaude.bind(claudeController));
 
-// RESTful Secret management routes (new)
-app.get("/api/secrets", secretsController.list.bind(secretsController));
-app.get("/api/secrets/:id", secretsController.get.bind(secretsController));
-app.post("/api/secrets", secretsController.create.bind(secretsController));
-app.put("/api/secrets/:id", secretsController.update.bind(secretsController));
-app.delete("/api/secrets/:id", secretsController.delete.bind(secretsController));
-
-// Legacy Secret management routes (backward compatibility - not documented)
-app.get("/api/secrets/list", secretsController.listSecrets.bind(secretsController));
-app.get("/api/secrets/get", secretsController.getSecret.bind(secretsController));
-app.post("/api/secrets/create", secretsController.createSecret.bind(secretsController));
-app.put("/api/secrets/update", secretsController.updateSecret.bind(secretsController));
-app.delete("/api/secrets/delete", secretsController.deleteSecret.bind(secretsController));
 
 const port = process.env.PORT || 8080;
 const host = '0.0.0.0'; // Explicitly bind to all interfaces

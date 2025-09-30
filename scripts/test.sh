@@ -243,14 +243,15 @@ test_remote() {
     print_error "Main endpoint test failed"
   fi
 
-  # Test git repository cloning
-  echo -e "\n3. Testing git repository cloning:"
+  # Test git repository cloning with public repo
+  echo -e "\n3. Testing git repository cloning (public repo):"
+
   RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${AUTH_TOKEN}" \
     -d '{
-      "prompt": "List the files in this repository and tell me what this project does",
-      "gitRepo": "https://github.com/agent-forge-org/f65adaf3-fc88-4aad-95e0-fd022f43fded-notion-database-viewer",
+      "prompt": "List the main files and tell me what this project does",
+      "gitRepo": "https://github.com/anthropics/anthropic-quickstarts",
       "gitBranch": "main",
       "maxTurns": 2
     }' 2>&1 | head -n 20)
@@ -261,6 +262,36 @@ test_remote() {
   else
     print_error "Git repository test failed"
     echo "$RESPONSE"
+  fi
+
+  # Test with SSH key if available
+  SSH_KEY_PATH="./tmp/test_key"
+  if [ -f "$SSH_KEY_PATH" ] && [ -s "$SSH_KEY_PATH" ]; then
+    echo -e "\n4. Testing git repository cloning with SSH key:"
+
+    # Read SSH key and escape for JSON
+    SSH_KEY=$(cat "$SSH_KEY_PATH" | sed 's/$/\\n/' | tr -d '\n')
+
+    RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
+      -H "Content-Type: application/json" \
+      -H "Authorization: Bearer ${AUTH_TOKEN}" \
+      -d "{
+        \"prompt\": \"List the files in this repository and tell me what this project does\",
+        \"gitRepo\": \"git@github.com:agent-forge-org/f65adaf3-fc88-4aad-95e0-fd022f43fded-notion-database-viewer.git\",
+        \"gitBranch\": \"main\",
+        \"gitSshKey\": \"$SSH_KEY\",
+        \"maxTurns\": 2
+      }" 2>&1 | head -n 20)
+
+    # Check for successful clone
+    if echo "$RESPONSE" | grep -q '"type":"system"' && echo "$RESPONSE" | grep -q '"type":"assistant"'; then
+      print_success "Private git repository test successful"
+    else
+      print_error "Private git repository test failed"
+      echo "$RESPONSE"
+    fi
+  else
+    print_info "SSH key not found at $SSH_KEY_PATH - skipping private repo test"
   fi
 }
 

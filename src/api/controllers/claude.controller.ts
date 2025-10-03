@@ -3,6 +3,7 @@ import path from "path";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "../services/git.service.js";
 import { WorkspaceService } from "../services/workspace.service.js";
+import { SimpleAnthropicProxy } from "../services/simple-proxy.js";
 import { RunRequest } from "../types/request.types.js";
 
 export class ClaudeController {
@@ -18,6 +19,8 @@ export class ClaudeController {
     console.log("POST /run - Request received");
     const {
       prompt,
+      anthropicApiKey,
+      anthropicOAuthToken,
       systemPrompt,
       appendSystemPrompt,
       allowedTools,
@@ -47,7 +50,9 @@ export class ClaudeController {
       gitBranch,
       hasEnvironmentSecrets: Object.keys(environmentSecrets).length > 0,
       hasSshKey: !!sshKey,
-      hasMetadata: !!metadata
+      hasMetadata: !!metadata,
+      hasAnthropicApiKey: !!anthropicApiKey,
+      hasAnthropicOAuthToken: !!anthropicOAuthToken
     });
 
     if (!prompt) {
@@ -56,10 +61,28 @@ export class ClaudeController {
       return;
     }
 
+    if (!anthropicApiKey && !anthropicOAuthToken) {
+      console.error("Missing authentication - need either anthropicApiKey or anthropicOAuthToken");
+      res.status(400).json({
+        error: "Either anthropicApiKey or anthropicOAuthToken is required"
+      });
+      return;
+    }
+
     let workspaceRoot: string | undefined;
+    let proxy: SimpleAnthropicProxy | undefined;
     let cleanedUp = false;
 
     try {
+      // Start token proxy - SECURITY: Prevents Claude from accessing real credentials
+      proxy = new SimpleAnthropicProxy(anthropicApiKey, anthropicOAuthToken);
+      await proxy.start();
+      const proxyPort = proxy.getPort();
+      console.log(`✓ Token proxy started on 127.0.0.1:${proxyPort}`);
+
+      // Small delay to ensure proxy is fully ready to accept connections
+      await new Promise(resolve => setTimeout(resolve, 100));
+
       // Create workspace
       workspaceRoot = await this.workspaceService.createWorkspace();
 
@@ -124,6 +147,26 @@ export class ClaudeController {
         await this.workspaceService.writeEnvFile(workspaceRoot, envContent);
       }
 
+      // Detect credential type and set appropriate dummy env var
+      // This ensures Claude sends the right header type that the proxy expects
+      const claudeEnv: Record<string, string> = {
+        // Proxy configuration - use ANTHROPIC_BASE_URL to only intercept Anthropic API traffic
+        // This prevents proxying git, npm, and other non-Anthropic traffic
+        ANTHROPIC_BASE_URL: `http://127.0.0.1:${proxyPort}`,
+        // User-provided environment secrets (intentionally accessible)
+        ...environmentSecrets
+      };
+
+      // SECURITY: Pass dummy credential that matches the type we have
+      // Proxy will replace it with the real credential
+      if (anthropicApiKey) {
+        // API key: Claude will send x-api-key header
+        claudeEnv.ANTHROPIC_API_KEY = 'dummy-api-key-proxy-will-replace';
+      } else if (anthropicOAuthToken) {
+        // OAuth token: Claude will send authorization Bearer header
+        claudeEnv.CLAUDE_CODE_OAUTH_TOKEN = 'dummy-oauth-token-proxy-will-replace';
+      }
+
       // Build options for Claude runner
       const options: ClaudeOptions = {
         allowedTools,
@@ -137,23 +180,13 @@ export class ClaudeController {
         fallbackModel,
         dangerouslySkipPermissions: process.env.DANGEROUSLY_SKIP_PERMISSIONS === 'true',
         debug: process.env.CLAUDE_DEBUG === 'true',
-        claudeEnv: {
-          // Pass any additional environment variables
-          CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN || "",
-          ...environmentSecrets
-        }
+        claudeEnv
       };
 
       console.log("Setting up SSE headers");
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
-
-      console.log("Auth check:", {
-        hasApiKey: !!process.env.ANTHROPIC_API_KEY,
-        hasAuthToken: !!process.env.CLAUDE_CODE_OAUTH_TOKEN,
-        tokenLength: process.env.CLAUDE_CODE_OAUTH_TOKEN?.length || 0
-      });
 
       const runner = new ClaudeRunner(workspaceRoot);
       let connectionClosed = false;
@@ -231,6 +264,11 @@ export class ClaudeController {
         cleanedUp = true;
       }
     } finally {
+      // Stop proxy
+      if (proxy) {
+        await proxy.stop();
+      }
+
       // Only schedule delayed cleanup if not already cleaned up
       if (workspaceRoot && !cleanedUp) {
         this.workspaceService.cleanupWorkspace(workspaceRoot, 5000);

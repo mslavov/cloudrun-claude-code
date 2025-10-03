@@ -150,40 +150,55 @@ test_local() {
     print_error "Health check failed: $HEALTH"
   fi
   
+  # Determine which auth to use
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    AUTH_FIELD="\"anthropicApiKey\": \"${ANTHROPIC_API_KEY}\""
+  elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    AUTH_FIELD="\"anthropicOAuthToken\": \"${CLAUDE_CODE_OAUTH_TOKEN}\""
+  else
+    print_error "No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN found"
+    print_info "Set one of these environment variables to test API requests"
+    return 1
+  fi
+
   # Simple request test
-  echo -e "\n2. Testing simple request with dynamic MCP:"
+  echo -e "\n2. Testing simple request:"
   RESPONSE=$(curl -s -X POST "${LOCAL_URL}/run" \
     -H "Content-Type: application/json" \
-    -d '{
-      "prompt": "Say hello in 3 words",
-      "maxTurns": 1,
-      "mcpConfigJson": {"mcpServers": {}},
-      "allowedTools": [],
-      "permissionMode": "bypassPermissions"
-    }' 2>&1 | head -n 5)
-  
+    -d "{
+      \"prompt\": \"Say hello in 3 words\",
+      ${AUTH_FIELD},
+      \"maxTurns\": 1,
+      \"allowedTools\": [],
+      \"permissionMode\": \"bypassPermissions\"
+    }" 2>&1 | head -n 5)
+
   if echo "$RESPONSE" | grep -q "data:"; then
     print_success "Simple request successful"
+  elif echo "$RESPONSE" | grep -q "anthropicApiKey.*required"; then
+    print_error "Authentication required"
   else
     print_error "Simple request failed"
+    echo "$RESPONSE"
   fi
   
   # Request with tools
   echo -e "\n3. Testing request with tools:"
   RESPONSE=$(curl -s -X POST "${LOCAL_URL}/run" \
     -H "Content-Type: application/json" \
-    -d '{
-      "prompt": "List files in the current directory",
-      "maxTurns": 2,
-      "mcpConfigJson": {"mcpServers": {}},
-      "allowedTools": ["LS"],
-      "permissionMode": "bypassPermissions"
-    }' 2>&1 | head -n 10)
-  
+    -d "{
+      \"prompt\": \"List files in the current directory\",
+      ${AUTH_FIELD},
+      \"maxTurns\": 2,
+      \"allowedTools\": [\"Bash\"],
+      \"permissionMode\": \"bypassPermissions\"
+    }" 2>&1 | head -n 10)
+
   if echo "$RESPONSE" | grep -q "data:"; then
     print_success "Tool request successful"
   else
     print_error "Tool request failed"
+    echo "$RESPONSE"
   fi
 }
 
@@ -225,22 +240,36 @@ test_remote() {
     print_error "Health check failed with status: ${HTTP_CODE}"
   fi
   
+  # Determine which auth to use for Anthropic API
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    ANTHROPIC_AUTH="\"anthropicApiKey\": \"${ANTHROPIC_API_KEY}\""
+  elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    ANTHROPIC_AUTH="\"anthropicOAuthToken\": \"${CLAUDE_CODE_OAUTH_TOKEN}\""
+  else
+    print_error "No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN found"
+    print_info "Set one of these environment variables to test API requests"
+    return 1
+  fi
+
   # Test main endpoint
   echo -e "\n2. Testing main endpoint:"
   RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${AUTH_TOKEN}" \
-    -d '{
-      "prompt": "Generate a simple test plan for a login form",
-      "maxTurns": 3,
-      "allowedTools": ["Write"],
-      "permissionMode": "acceptEdits"
-    }' 2>&1 | head -n 10)
+    -d "{
+      \"prompt\": \"Say hello in 5 words\",
+      ${ANTHROPIC_AUTH},
+      \"maxTurns\": 1,
+      \"allowedTools\": [],
+      \"permissionMode\": \"bypassPermissions\"
+    }" 2>&1 | head -n 10)
 
   if echo "$RESPONSE" | grep -q "data:"; then
+    echo "$RESPONSE"
     print_success "Main endpoint test successful"
   else
     print_error "Main endpoint test failed"
+    echo "$RESPONSE"
   fi
 
   # Test git repository cloning with public repo
@@ -249,12 +278,13 @@ test_remote() {
   RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
     -H "Content-Type: application/json" \
     -H "Authorization: Bearer ${AUTH_TOKEN}" \
-    -d '{
-      "prompt": "List the main files and tell me what this project does",
-      "gitRepo": "https://github.com/anthropics/anthropic-quickstarts",
-      "gitBranch": "main",
-      "maxTurns": 2
-    }' 2>&1 | head -n 20)
+    -d "{
+      \"prompt\": \"List the main files and tell me what this project does\",
+      ${ANTHROPIC_AUTH},
+      \"gitRepo\": \"https://github.com/anthropics/anthropic-quickstarts\",
+      \"gitBranch\": \"main\",
+      \"maxTurns\": 2
+    }" 2>&1 | head -n 20)
 
   # Check for successful clone by looking for session init and file listing activity
   if echo "$RESPONSE" | grep -q '"type":"system"' && echo "$RESPONSE" | grep -q '"type":"assistant"'; then
@@ -277,9 +307,10 @@ test_remote() {
       -H "Authorization: Bearer ${AUTH_TOKEN}" \
       -d "{
         \"prompt\": \"List the files in this repository and tell me what this project does\",
+        ${ANTHROPIC_AUTH},
         \"gitRepo\": \"git@github.com:agent-forge-org/f65adaf3-fc88-4aad-95e0-fd022f43fded-notion-database-viewer.git\",
         \"gitBranch\": \"main\",
-        \"gitSshKey\": \"$SSH_KEY\",
+        \"sshKey\": \"$SSH_KEY\",
         \"maxTurns\": 2
       }" 2>&1 | head -n 20)
 
@@ -300,14 +331,24 @@ show_examples() {
   print_header "API Request Examples"
   
   cat << 'EOF'
-1. SIMPLE REQUEST (No MCP servers)
---------------------------------
+1. SIMPLE REQUEST
+-----------------
+# With API Key
 curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Write a test plan for login functionality",
-    "maxTurns": 3,
-    "mcpConfigJson": {"mcpServers": {}}
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "maxTurns": 3
+  }'
+
+# With OAuth Token
+curl -N -X POST http://localhost:8080/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Write a test plan for login functionality",
+    "anthropicOAuthToken": "your-oauth-token-here",
+    "maxTurns": 3
   }'
 
 2. WITH GITHUB MCP SERVER
@@ -316,6 +357,7 @@ curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Review the latest PRs",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "maxTurns": 5,
     "mcpConfigJson": {
       "mcpServers": {
@@ -337,6 +379,7 @@ curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Check GitHub issues and create JIRA tickets",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "systemPrompt": "You are a QA engineer",
     "maxTurns": 8,
     "mcpConfigJson": {
@@ -369,8 +412,8 @@ curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Create a test suite for the checkout process",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "maxTurns": 6,
-    "mcpConfigJson": {"mcpServers": {}},
     "allowedTools": ["Read", "Write", "Grep", "LS"],
     "permissionMode": "acceptEdits",
     "cwdRelative": "./tests"
@@ -382,8 +425,8 @@ curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Research best practices for API testing in 2024",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "maxTurns": 5,
-    "mcpConfigJson": {"mcpServers": {}},
     "allowedTools": ["WebSearch", "WebFetch", "Write"],
     "permissionMode": "bypassPermissions"
   }'
@@ -394,6 +437,7 @@ curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "List the files and explain what this project does",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "gitRepo": "https://github.com/owner/repo",
     "gitBranch": "main",
     "maxTurns": 3,
@@ -409,10 +453,16 @@ curl -N -X POST https://your-service-url/run \
   -H "Authorization: Bearer ${AUTH_TOKEN}" \
   -d '{
     "prompt": "Your prompt here",
-    "mcpConfigJson": {"mcpServers": {}},
+    "anthropicApiKey": "sk-ant-your-key-here",
     "allowedTools": ["Read", "Write"],
     "permissionMode": "acceptEdits"
   }'
+
+NOTES:
+- anthropicApiKey or anthropicOAuthToken is REQUIRED in all requests
+- Use anthropicApiKey for API keys from console.anthropic.com
+- Use anthropicOAuthToken for OAuth tokens from Claude subscription
+- Environment variables can be set: ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN
 EOF
 
   print_info "Save these examples to a file for reference"

@@ -24,25 +24,25 @@ Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service
 - Node.js 20+
 - Anthropic API key (from https://console.anthropic.com/)
 
-### 1. Authentication Setup
+### 1. Get Anthropic API Key
 
-Choose one of the following authentication methods:
+The service requires API keys to be passed in each request payload (not as environment variables). Get your API key:
 
-#### API Keys
 ```bash
 # Get your API key from https://console.anthropic.com/
-export ANTHROPIC_API_KEY=sk-ant-...
-```
+# You'll pass this key in the request payload
 
-#### OAuth Tokens
-```bash
+# For local testing, you can set it as an environment variable
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# OR use OAuth token from Claude subscription
 # Generate OAuth token using Claude Code CLI
 npm install -g @anthropic-ai/claude-code
 claude setup-token
-
-# Set the token for the service
 export CLAUDE_CODE_OAUTH_TOKEN=<your-token>
 ```
+
+**Important:** The service uses a **payload-based authentication model**. API keys/OAuth tokens must be included in each request's JSON payload for security isolation.
 
 ### 2. Set up environment variables
 
@@ -93,21 +93,26 @@ curl https://your-service-url/health?verbose=true
 
 ### Run Agent
 
-```bash
-# For public endpoints (no authentication required if service account is configured)
-curl -N -X POST https://your-service-url/run \
-  -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Generate a test plan for login functionality",
-    "maxTurns": 6
-  }'
+**IMPORTANT:** All requests must include either `anthropicApiKey` or `anthropicOAuthToken` in the request payload.
 
-# For private endpoints (with IAM authentication)
+```bash
+# Basic request with API key
 curl -N -X POST https://your-service-url/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Generate a test plan for login functionality",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "maxTurns": 6
+  }'
+
+# With OAuth token (from Claude subscription)
+curl -N -X POST https://your-service-url/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Generate a test plan for login functionality",
+    "anthropicOAuthToken": "your-oauth-token-here",
     "maxTurns": 6
   }'
 
@@ -117,24 +122,29 @@ curl -N -X POST https://your-service-url/run \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Review the code and suggest improvements",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "systemPrompt": "You are a code reviewer focusing on best practices",
     "allowedTools": ["Read", "Write", "Grep"],
     "permissionMode": "acceptEdits",
     "maxTurns": 6
   }'
 
-# With specific model and disallowed tools
+# With specific model and environment variables
 curl -N -X POST https://your-service-url/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Analyze this codebase for security issues",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "model": "claude-3-5-sonnet-20241022",
     "allowedTools": ["Read", "Grep"],
     "disallowedTools": ["Write", "Bash"],
     "appendSystemPrompt": "Focus on OWASP top 10 vulnerabilities",
     "maxTurns": 10,
-    "useNamedPipe": false
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://...",
+      "API_KEY": "..."
+    }
   }'
 ```
 
@@ -147,6 +157,8 @@ See `examples/` folder for more request examples.
 | Parameter | Type | Description | Default |
 |-----------|------|-------------|---------|
 | `prompt` | string | **Required** The prompt for Claude | - |
+| `anthropicApiKey` | string | **Required** Anthropic API key (from console.anthropic.com) | - |
+| `anthropicOAuthToken` | string | **Alternative** OAuth token (from Claude subscription) | - |
 | `systemPrompt` | string | Custom system prompt to replace the default | - |
 | `appendSystemPrompt` | string | Text to append to the system prompt | - |
 | `allowedTools` | string[] | List of allowed tools | Env var |
@@ -160,25 +172,26 @@ See `examples/` folder for more request examples.
 | `gitRepo` | string | Git repository URL to clone (SSH or HTTPS) | - |
 | `gitBranch` | string | Branch to checkout | "main" |
 | `gitDepth` | number | Clone depth for shallow cloning | 1 |
+| `sshKey` | string | SSH private key for git authentication (PEM format) | - |
+| `environmentSecrets` | object | Environment variables as key-value pairs | {} |
 | `timeoutMinutes` | number | Process timeout in minutes | 55 |
 
 ### Environment Variables
 
-**Authentication (choose one):**
-- `CLAUDE_CODE_OAUTH_TOKEN`: OAuth token for Claude Pro/Max subscription users
-  - Generate locally with: `claude setup-token`
-  - Use this token in your deployment
-- `ANTHROPIC_API_KEY`: API key for direct Anthropic API access
-  - Get from: https://console.anthropic.com/
-
-**Configuration:**
+**Service Configuration:**
+- `PORT`: Server port (default: 8080)
 - `ALLOWED_TOOLS`: Comma-separated list of allowed tools
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
 
+**Authentication:**
+- **IMPORTANT**: The service uses a **payload-based authentication model**
+- API keys/OAuth tokens are passed in request payload, **not** as environment variables
+- For local testing, you can optionally set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` environment variables
+
 **Git Repository Support (Optional):**
-- `GIT_SSH_KEY`: Global SSH private key for cloning private repositories
-  - Optional - the service supports per-repository SSH keys via API
-  - See Git Repository Setup section for both approaches
+- `GIT_SSH_KEY`: Global SSH private key for cloning private repositories (fallback)
+  - Optional - the service prefers per-request SSH keys via `sshKey` parameter
+  - See Git Repository Setup section for details
 
 ### Tool Permissions
 
@@ -192,39 +205,55 @@ Examples:
 
 The service can clone and work with git repositories during request execution. This is useful for analyzing codebases, running tests, or making changes to existing projects.
 
-### SSH Key Management Options
+### SSH Key Management
 
-The service supports two approaches for SSH authentication with private repositories:
+The service uses a **payload-based approach** for SSH keys, designed to work seamlessly with orchestration systems:
 
-1. **Per-Repository SSH Keys (Recommended)**: Managed via the API, providing better security isolation. Each repository can have its own SSH key stored in Google Secret Manager.
+**Per-Request SSH Keys (Recommended)**: SSH keys are passed directly in the `/run` request payload for maximum security and flexibility:
 
-2. **Global SSH Key (Optional)**: A single SSH key for all repositories, useful for simpler setups or backward compatibility.
-
-### Per-Repository SSH Keys (Recommended)
-
-Use the SSH Key Management API to manage repository-specific deploy keys:
-
-```bash
-# Create a new SSH key for a repository
-curl -X POST https://your-service-url/api/ssh-keys/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "org": "myorg",
-    "repo": "myrepo",
-    "keyName": "claude-deploy-key"
-  }'
-
-# List SSH keys for a repository
-curl https://your-service-url/api/ssh-keys/list?org=myorg&repo=myrepo
-
-# Get SSH key details
-curl https://your-service-url/api/ssh-keys/get?org=myorg&repo=myrepo&keyId=123456
-
-# Delete an SSH key
-curl -X DELETE "https://your-service-url/api/ssh-keys/delete?org=myorg&repo=myrepo&keyId=123456"
+```json
+{
+  "prompt": "Run tests and deploy",
+  "anthropicApiKey": "sk-ant-...",
+  "gitRepo": "git@github.com:myorg/myrepo.git",
+  "gitBranch": "main",
+  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+}
 ```
 
-When using per-repository keys, the service automatically selects the appropriate key when cloning repositories.
+**How it works:**
+- SSH keys are written to the ephemeral workspace with secure permissions (0600)
+- HTTPS URLs are automatically converted to SSH format if an SSH key is provided
+- All credentials are cleaned up automatically after request completion
+- Each request has isolated credentials, preventing cross-contamination
+
+**Global SSH Key (Fallback)**: For backward compatibility, a global SSH key can be mounted at deployment time via Secret Manager. This is used only when no `sshKey` is provided in the payload.
+
+### Environment Variables with Repositories
+
+When working with repositories, you can pass environment variables directly in the request:
+
+```bash
+curl -N -X POST https://your-service-url/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run tests with production config",
+    "anthropicApiKey": "sk-ant-...",
+    "gitRepo": "git@github.com:myorg/myrepo.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://...",
+      "API_KEY": "sk-..."
+    }
+  }'
+```
+
+Environment variables are:
+- Injected into Claude's process environment
+- Written to a `.env` file in the workspace
+- Cleaned up automatically after request completion
+- Isolated per request for security
 
 ### Global SSH Key Setup (Optional)
 
@@ -282,7 +311,7 @@ echo "GIT_SSH_KEY=\"$(cat .keys/claude_ssh_key)\"" >> .env
 
 ### Using Git Repositories in Requests
 
-Once the SSH key is configured, you can clone repositories in your requests:
+You can clone repositories in your requests by providing the necessary credentials:
 
 ```bash
 # Clone and analyze a private repository
@@ -291,36 +320,44 @@ curl -N -X POST https://your-service-url/run \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Analyze the codebase and suggest improvements",
+    "anthropicApiKey": "sk-ant-...",
     "gitRepo": "git@github.com:your-org/private-repo.git",
     "gitBranch": "develop",
     "gitDepth": 10,
-    "allowedTools": ["Read", "Grep", "LS"]
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...",
+    "allowedTools": ["Read", "Grep", "Bash"]
   }'
 
-# Work with a specific customer branch
+# Work with a specific branch and environment
 curl -N -X POST https://your-service-url/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Run the test suite and fix any failing tests",
+    "anthropicApiKey": "sk-ant-...",
     "gitRepo": "git@github.com:your-org/app.git",
-    "gitBranch": "customers/acme/staging",
+    "gitBranch": "staging",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://staging...",
+      "API_KEY": "staging-key"
+    },
     "allowedTools": ["Read", "Write", "Edit", "Bash"]
   }'
 ```
 
-### Automatic Environment Variables
-
-When cloning a repository, the service automatically loads environment variables based on the repository and branch using the hierarchical secret resolution system. See the Secret Management API section for details.
-
 ## Security Considerations
 
-1. **Network Isolation**: Use Direct VPC egress with firewall rules
-2. **Secrets Management**: Use Secret Manager with version rotation
-3. **Tool Restrictions**: Carefully configure allowed tools
-4. **Permission Mode**: Start with `acceptEdits` for safety
-5. **Ephemeral Workspaces**: Each request gets isolated `/tmp` workspace
-6. **SSH Key Security**: Store SSH keys securely in Secret Manager, never commit them
+1. **Payload-Based Authentication**: API keys passed in request payload, not environment variables
+2. **Token Proxy**: Service uses a proxy to prevent Claude from accessing real API credentials
+3. **User Isolation**: Separate users (serveruser/claudeuser) in Docker for code/runtime isolation
+4. **Ephemeral Workspaces**: Each request gets isolated `/tmp` workspace with automatic cleanup
+5. **Credential Isolation**: SSH keys and environment variables are per-request and isolated
+6. **Network Isolation**: Use Direct VPC egress with firewall rules
+7. **Secrets Management**: Optional use of Secret Manager for global SSH keys
+8. **Tool Restrictions**: Carefully configure allowed tools
+9. **Permission Mode**: Start with `acceptEdits` for safety
+10. **Concurrency Limits**: CONCURRENCY=1 ensures process isolation between requests
 
 ## Local Development
 
@@ -386,10 +423,10 @@ All deployment scripts are in the `scripts/` folder:
 - Check VPC/firewall configuration
 
 ### Authentication errors
-- Ensure either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN is set correctly
+- Ensure `anthropicApiKey` or `anthropicOAuthToken` is included in the request payload
 - For API keys: Obtain from https://console.anthropic.com/
 - For OAuth tokens: Generate using `claude setup-token` command
-- Check Secret Manager permissions
+- The service uses payload-based authentication, not environment variables
 
 ### Tool execution failures
 - Verify tool permissions in ALLOWED_TOOLS

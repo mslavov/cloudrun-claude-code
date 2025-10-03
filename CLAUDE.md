@@ -25,7 +25,18 @@ npm run build     # Compile TypeScript to JavaScript in dist/
 npm start         # Run production server from dist/
 ```
 
-For deployment, testing, and service account setup commands, refer to docs/deployment.md and docs/testing.md.
+### Testing
+**IMPORTANT**: Always use/update the existing test script at `scripts/test.sh` when testing changes.
+
+```bash
+./scripts/test.sh local    # Test local Docker container
+./scripts/test.sh remote   # Test deployed Cloud Run service
+./scripts/test.sh auth     # Test authentication setup
+./scripts/test.sh examples # Show API request examples
+./scripts/test.sh all      # Run all tests
+```
+
+For deployment and service account setup commands, refer to docs/deployment.md and docs/testing.md.
 
 ## Architecture
 

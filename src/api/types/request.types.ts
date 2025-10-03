@@ -1,5 +1,7 @@
 export interface RunRequest {
   prompt: string;
+  anthropicApiKey?: string; // User's Anthropic API key
+  anthropicOAuthToken?: string; // User's Anthropic OAuth token (from Claude subscription)
   systemPrompt?: string;
   appendSystemPrompt?: string;
   allowedTools?: string[];

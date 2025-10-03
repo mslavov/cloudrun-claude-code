@@ -29,11 +29,12 @@ npm run dev
 
 3. **Manual testing with curl:**
 ```bash
-# Simple request
+# Simple request (requires API key in payload)
 curl -N -X POST http://localhost:8080/run \
   -H "Content-Type: application/json" \
   -d '{
     "prompt": "Your prompt here",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "maxTurns": 3,
     "allowedTools": ["Read", "Write"],
     "permissionMode": "bypassPermissions"
@@ -66,13 +67,18 @@ The `scripts/test.sh` script includes:
 
 ## Environment Variables
 
-Set these in your `.env` file or export them:
+**IMPORTANT**: The service uses **payload-based authentication**. API keys are passed in request payload, not environment variables.
+
+For local testing convenience, you can optionally set:
 
 ```bash
-# Authentication (choose one)
-ANTHROPIC_API_KEY=sk-ant-...
-CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token
+# Optional: For local testing only (not required in production)
+export ANTHROPIC_API_KEY=sk-ant-...
+# OR
+export CLAUDE_CODE_OAUTH_TOKEN=your-oauth-token
 ```
+
+The test script will use these environment variables if set, but in production all credentials should be passed in the request payload.
 
 ## Troubleshooting
 
@@ -155,14 +161,20 @@ curl -X DELETE "$SERVICE_URL/api/secrets/delete?org=mycompany&repo=backend&branc
 ### Test with Git Repository Integration
 
 ```bash
-# Test automatic environment loading with repository clone
+# Test with repository clone and environment variables
 curl -N -X POST $SERVICE_URL/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Print all environment variables that start with CUSTOMER_ or DATABASE_",
+    "anthropicApiKey": "sk-ant-your-key-here",
     "gitRepo": "git@github.com:mycompany/backend.git",
     "gitBranch": "customers/acme/staging",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://...",
+      "CUSTOMER_ID": "acme"
+    },
     "allowedTools": ["Bash"],
     "maxTurns": 1
   }'

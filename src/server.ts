@@ -24,21 +24,11 @@ app.post("/run", claudeController.runClaude.bind(claudeController));
 const port = process.env.PORT || 8080;
 const host = '0.0.0.0'; // Explicitly bind to all interfaces
 
-// Validate environment like the official action does
+// SECURITY: Service no longer uses global tokens
+// Users must provide anthropicApiKey in each request payload
 function validateEnvironment() {
-  const hasApiKey = !!process.env.ANTHROPIC_API_KEY;
-  const hasOAuthToken = !!process.env.CLAUDE_CODE_OAUTH_TOKEN;
-
-  if (!hasApiKey && !hasOAuthToken) {
-    console.warn("WARNING: Neither ANTHROPIC_API_KEY nor CLAUDE_CODE_OAUTH_TOKEN is set");
-    console.warn("Authentication may fail. Please set one of these environment variables.");
-  }
-
-  if (hasOAuthToken) {
-    console.log("Using OAuth token for authentication");
-  } else if (hasApiKey) {
-    console.log("Using API key for authentication");
-  }
+  console.log("Security mode: User-provided API keys via request payload");
+  console.log("Service-level ANTHROPIC_API_KEY/CLAUDE_CODE_OAUTH_TOKEN are not used");
 }
 
 // Setup global SSH key if mounted (optional - per-repository keys are preferred)
@@ -72,9 +62,14 @@ fixSshKeyPermissions();
 console.log("Starting server with environment:", {
   NODE_ENV: process.env.NODE_ENV,
   PORT: port,
-  hasAnthropicApiKey: !!process.env.ANTHROPIC_API_KEY,
-  hasAnthropicAuthToken: !!process.env.CLAUDE_CODE_OAUTH_TOKEN,
-  permissionMode: process.env.PERMISSION_MODE
+  permissionMode: process.env.PERMISSION_MODE,
+  concurrencyMode: 'single-request-only'
 });
 
-app.listen(port as number, host, () => console.log(`Server listening on ${host}:${port}`));
+const server = app.listen(port as number, host, () => {
+  console.log(`Server listening on ${host}:${port}`);
+  console.log(`Concurrency: 1 request at a time (Cloud Run + TCP-level protection)`);
+});
+
+// TCP-level concurrency protection (defense in depth)
+server.maxConnections = 1;

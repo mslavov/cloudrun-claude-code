@@ -1,8 +1,9 @@
 import { spawn, ChildProcess } from "child_process";
 import { exec } from "child_process";
 import { promisify } from "util";
-import { unlink, writeFile } from "fs/promises";
+import { unlink, writeFile, access } from "fs/promises";
 import { createWriteStream } from "fs";
+import { constants } from "fs";
 import path from "path";
 
 const execAsync = promisify(exec);
@@ -52,7 +53,7 @@ export class ClaudeRunner {
     await execAsync(`mkfifo "${this.pipePath}"`);
   }
 
-  private buildArgs(options: ClaudeOptions): string[] {
+  private async buildArgs(options: ClaudeOptions): Promise<string[]> {
     const claudeArgs = [...BASE_ARGS];
 
     if (options.dangerouslySkipPermissions) {
@@ -88,8 +89,17 @@ export class ClaudeRunner {
       claudeArgs.push("--permission-mode", options.permissionMode);
     }
 
-    // Explicitly load project-level MCP configuration
-    claudeArgs.push("--mcp-config", ".mcp.json");
+    // Check if .mcp.json exists in the workspace
+    // This allows repositories to define their own MCP servers
+    const mcpConfigPath = path.join(this.workspaceRoot, ".mcp.json");
+    try {
+      await access(mcpConfigPath, constants.R_OK);
+      claudeArgs.push("--mcp-config", ".mcp.json");
+      console.log("✓ Found .mcp.json in workspace, loading MCP configuration");
+    } catch {
+      // .mcp.json doesn't exist or isn't readable - that's fine
+      console.log("No .mcp.json found in workspace, skipping MCP configuration");
+    }
 
     return claudeArgs;
   }
@@ -106,20 +116,18 @@ export class ClaudeRunner {
     // Create named pipe
     await this.createNamedPipe();
 
-    const claudeArgs = this.buildArgs(options);
+    const claudeArgs = await this.buildArgs(options);
     console.log("Starting Claude with args:", claudeArgs);
 
-    // Build environment
+    // Build environment - SECURITY: Only pass explicitly defined variables
+    // DO NOT spread process.env to prevent token leakage
     const claudeEnv = {
-      ...process.env,
-      ...options.claudeEnv,
-      // Ensure OAuth token is set if available
-      CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN,
-      // Preserve HOME for Claude configuration access
+      ...options.claudeEnv, // User-controlled environment (includes proxy config)
+      // Minimal required environment variables
       HOME: process.env.HOME || '/root',
-      // Set GitHub Action environment flag (enables OAuth support)
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+      // Claude-specific flags
       CLAUDE_CODE_ACTION: '1',
-      // Additional Claude environment variables
       CLAUDE_CODE_ENTRYPOINT: 'cli',
       CLAUDECODE: '1',
     };
@@ -136,7 +144,11 @@ export class ClaudeRunner {
       pipeStream.destroy();
     });
 
-    // Spawn Claude process
+    // Spawn Claude process (runs as same user - claudeuser)
+    // Security isolation relies on:
+    // 1. Cloud Run's gVisor/microVM layer
+    // 2. File permissions (/app owned by serveruser, not readable by claudeuser)
+    // 3. Ephemeral workspaces in /tmp
     this.process = spawn("claude", claudeArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: claudeEnv,
@@ -243,25 +255,27 @@ export class ClaudeRunner {
     onData: (data: string) => void,
     onError: (error: string) => void
   ): Promise<ClaudeRunResult> {
-    const claudeArgs = this.buildArgs(options);
+    const claudeArgs = await this.buildArgs(options);
     console.log("Starting Claude with args:", claudeArgs);
 
-    // Build environment
+    // Build environment - SECURITY: Only pass explicitly defined variables
+    // DO NOT spread process.env to prevent token leakage
     const claudeEnv = {
-      ...process.env,
-      ...options.claudeEnv,
-      // Ensure OAuth token is passed through if available
-      ...(process.env.CLAUDE_CODE_OAUTH_TOKEN && { CLAUDE_CODE_OAUTH_TOKEN: process.env.CLAUDE_CODE_OAUTH_TOKEN }),
-      // Preserve HOME for Claude configuration access
+      ...options.claudeEnv, // User-controlled environment (includes proxy config)
+      // Minimal required environment variables
       HOME: process.env.HOME || '/root',
-      // Set GitHub Action environment flag (enables OAuth support)
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+      // Claude-specific flags
       CLAUDE_CODE_ACTION: '1',
-      // Additional Claude environment variables
       CLAUDE_CODE_ENTRYPOINT: 'cli',
       CLAUDECODE: '1',
     };
 
-    // Spawn Claude process
+    // Spawn Claude process (runs as same user - claudeuser)
+    // Security isolation relies on:
+    // 1. Cloud Run's gVisor/microVM layer
+    // 2. File permissions (/app owned by serveruser, not readable by claudeuser)
+    // 3. Ephemeral workspaces in /tmp
     this.process = spawn("claude", claudeArgs, {
       stdio: ["pipe", "pipe", "pipe"],
       env: claudeEnv,

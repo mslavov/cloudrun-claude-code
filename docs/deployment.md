@@ -29,34 +29,28 @@ cp .env.example .env
 vim .env
 ```
 
-### 2. Set Authentication
+### 2. Understand Authentication Model
 
-Choose one of the following authentication methods:
+**IMPORTANT**: This service uses a **payload-based authentication model**. API keys/OAuth tokens are passed in each request's JSON payload, not as environment variables.
 
-#### Option A: API Key
+For local testing, you can optionally set environment variables:
 ```bash
-# Add to .env file:
-ANTHROPIC_API_KEY=sk-ant-...
-```
+# Option A: API Key
+export ANTHROPIC_API_KEY=sk-ant-...
 
-#### Option B: OAuth Token (for Claude Pro/Max subscribers)
-```bash
-# Get token from Claude Code CLI
+# Option B: OAuth Token (for Claude Pro/Max subscribers)
 npm install -g @anthropic-ai/claude-code
 claude setup-token
-
-# Add to .env file:
-CLAUDE_CODE_OAUTH_TOKEN=<your-token>
+export CLAUDE_CODE_OAUTH_TOKEN=<your-token>
 ```
+
+**Note**: These environment variables are only for local testing convenience. In production, credentials are passed in the request payload for better security isolation.
 
 ### 3. Configure SSH Key (Optional)
 
-The service supports two approaches for SSH authentication with private Git repositories:
+The service uses a **payload-based approach** for SSH keys. SSH keys are typically passed in the request payload for maximum security and flexibility.
 
-1. **Per-Repository SSH Keys (Recommended)**: Managed via the API after deployment
-2. **Global SSH Key (Optional)**: Set up before deployment for all repositories
-
-To set up a global SSH key (optional):
+Optionally, you can set up a global SSH key as a fallback:
 ```bash
 # Generate and configure an SSH key for GitHub
 ./scripts/gen_key.sh
@@ -65,7 +59,7 @@ To set up a global SSH key (optional):
 # The key will be deployed as a secret in step 5
 ```
 
-Skip this step if you plan to use per-repository SSH keys via the API.
+**Recommended approach**: Pass SSH keys in the request payload using the `sshKey` parameter. This provides better security isolation and is ideal for orchestration systems.
 
 ### 4. Configure Google Cloud
 
@@ -135,9 +129,9 @@ python examples/authenticated-client.py
 
 The deployment creates:
 
-1. **Secret Manager Secrets:**
-   - `CLAUDE_CODE_OAUTH_TOKEN` - OAuth token for Claude Pro/Max users
-   - Or `ANTHROPIC_API_KEY` - API key for direct Anthropic API access
+1. **Secret Manager Secrets (Optional):**
+   - `GIT_SSH_KEY` - Global SSH key for git repositories (if configured)
+   - **Note**: Anthropic API keys are NOT stored as secrets - they're passed in request payloads
 
 2. **Artifact Registry:**
    - Docker repository for your container images
@@ -147,23 +141,27 @@ The deployment creates:
    - Fully managed serverless container
    - Auto-scaling from 0 to max instances
    - HTTPS endpoint with authentication
+   - CONCURRENCY=1 for maximum security isolation
 
 ## Configuration Details
 
 ### Service Resources
 - **CPU:** 2 vCPUs (configurable in .env)
 - **Memory:** 4GB (configurable in .env)
-- **Timeout:** 60 minutes (configurable in .env, max allowed by Cloud Run)
-- **Concurrency:** 3 requests per instance (optimized for Claude workloads)
+- **Timeout:** 15 minutes (configurable in .env, up to 60 min max)
+- **Concurrency:** 1 request per instance (security isolation)
 - **Scaling:** 0-10 instances (configurable in .env)
-- **Per-request resources:** ~1.3GB RAM, 0.66 CPU cores
-- **Total capacity:** 30 concurrent requests (10 instances × 3 each)
+- **Per-request resources:** Full 4GB RAM, 2 CPU cores
+- **Total capacity:** 10 concurrent requests (10 instances × 1 each)
 
 ### Security
-- **Authentication:** Service requires authentication (no public access)
+- **Payload-Based Authentication:** API keys passed in request payload for isolation
+- **Token Proxy:** Prevents Claude from accessing real API credentials
+- **User Isolation:** Separate users in Docker (serveruser/claudeuser)
 - **Service Account:** Dedicated service account for client applications
-- **Secrets:** Mounted securely via Secret Manager
-- **Ephemeral workspace:** /tmp cleared per request
+- **Ephemeral workspace:** /tmp cleared per request with automatic cleanup
+- **Credential Isolation:** SSH keys and env vars are per-request
+- **Concurrency=1:** Complete process isolation between requests
 - **No persistent storage:** Stateless service
 
 ### Authentication Methods
@@ -238,9 +236,10 @@ gcloud run services describe {service-name} --region={region} --format="value(st
    gcloud run services logs read {service-name} --region={region}
    ```
 
-2. Verify authentication token is set:
+2. Verify you have an Anthropic API key to include in requests:
    ```bash
-   gcloud secrets versions access latest --secret="CLAUDE_CODE_OAUTH_TOKEN"
+   # API keys are passed in request payload, not environment variables
+   echo "anthropicApiKey: sk-ant-..."
    ```
 
 3. Test with minimal request:
@@ -255,7 +254,7 @@ gcloud run services describe {service-name} --region={region} --format="value(st
 - Use appropriate CPU/memory settings
 - Set reasonable timeout values (but note: longer timeouts mean longer billing)
 - Monitor usage in Cloud Console
-- **Concurrency optimization**: Lower concurrency (3) means better resource utilization per request
+- **Concurrency=1**: Provides maximum isolation but lower throughput per instance
 
 ### Free Tier
 Cloud Run offers a generous free tier:
@@ -300,9 +299,9 @@ gcloud run services delete {service-name} --region={region}
 # Delete service account
 gcloud iam service-accounts delete claude-code-client@{project-id}.iam.gserviceaccount.com
 
-# Delete secrets
-gcloud secrets delete CLAUDE_CODE_OAUTH_TOKEN
-# Delete any additional secrets like GITHUB_TOKEN, SLACK_BOT_TOKEN if created
+# Delete secrets (if any were created)
+gcloud secrets delete GIT_SSH_KEY
+# The service uses payload-based auth, so no API key secrets to delete
 
 # Delete Artifact Registry repository
 gcloud artifacts repositories delete claude-code --location={region}

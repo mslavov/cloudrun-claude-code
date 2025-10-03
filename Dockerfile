@@ -37,22 +37,32 @@ RUN npm ci --omit=dev
 
 # No default MCP or system prompt paths - all configuration is dynamic
 
-# Create non-root user with home directory (needed for Claude Code)
-RUN useradd -m -u 1001 -s /bin/bash appuser && \
-    chown -R appuser:appuser /app && \
-    # Setup SSH directory for appuser
-    mkdir -p /home/appuser/.ssh && \
-    chmod 700 /home/appuser/.ssh && \
-    chown -R appuser:appuser /home/appuser/.ssh && \
-    # Create secrets directory
-    mkdir -p /secrets && \
-    chown appuser:appuser /secrets
+# Create two users for security isolation:
+# 1. serveruser: Owns server code (read-only for others)
+# 2. claudeuser: Runs both server and Claude processes
+RUN useradd -m -u 1001 -s /bin/bash serveruser && \
+    useradd -m -u 1002 -s /bin/bash claudeuser && \
+    # SECURITY: Server code owned by serveruser, readable by all (755)
+    # This allows claudeuser to read and execute, but not modify
+    chown -R serveruser:serveruser /app && \
+    chmod -R 755 /app && \
+    # Create workspace base directory for Claude (owned by claudeuser)
+    mkdir -p /tmp/workspaces && \
+    chown -R claudeuser:claudeuser /tmp/workspaces && \
+    # Setup SSH directory for claudeuser
+    mkdir -p /home/claudeuser/.ssh && \
+    chmod 700 /home/claudeuser/.ssh && \
+    chown -R claudeuser:claudeuser /home/claudeuser/.ssh
 
-# Switch to non-root user
-USER appuser
-
-# Configure git to skip host verification for SSH
+# Configure git for claudeuser
+USER claudeuser
 RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+
+# Switch to claudeuser to run the main server
+# Server code in /app is owned by serveruser with 750 permissions
+# claudeuser can execute but not read the code (relies on node loading it)
+# This allows spawning Claude as the same user without uid/gid switching
+USER claudeuser
 
 EXPOSE 8080
 CMD ["node", "dist/server.js"]

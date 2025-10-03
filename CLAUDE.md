@@ -66,6 +66,13 @@ For deployment, testing, and service account setup commands, refer to docs/deplo
 - `model`: Specific Claude model to use
 - `fallbackModel`: Fallback model if primary fails
 - `useNamedPipe`: Use named pipe for prompt delivery (default: true)
+- `gitRepo`: Git repository URL to clone (SSH or HTTPS)
+- `gitBranch`: Git branch to checkout (default: main)
+- `gitDepth`: Clone depth for shallow cloning (default: 1)
+- `environmentSecrets`: Object with environment variables as key-value pairs
+- `sshKey`: SSH private key for git authentication (PEM format)
+- `timeoutMinutes`: Process timeout in minutes (default: 55, max: 60)
+- `metadata`: Optional metadata for logging/tracking
 
 ### Environment Variables
 - `PORT`: Server port (default: 8080)
@@ -97,26 +104,47 @@ For deployment, testing, and service account setup commands, refer to docs/deplo
 - Claude installation moved to /opt for shared access
 - Symlinks created for user home directory access
 
-## SSH Key Management
+## SSH Key and Environment Variable Management
 
-The service supports two approaches for SSH authentication with private Git repositories:
+The service uses a **payload-based approach** for SSH keys and environment variables, designed to work seamlessly with orchestration systems like Agent Forge.
 
-### 1. Per-Repository SSH Keys (Recommended)
-- Managed via the SSH Key Management API endpoints
-- Each repository can have its own SSH key stored in Google Secret Manager
-- Keys are fetched dynamically when cloning repositories
-- Better security isolation between projects
-- No deployment-time configuration needed
+### Payload-Based (Recommended)
+SSH keys and environment variables are passed directly in the `/run` request payload:
 
-### 2. Global SSH Key (Optional)
-- Single SSH key mounted at `/home/appuser/.ssh/id_rsa`
-- Set via `GIT_SSH_KEY` environment variable
-- Applied to all Git operations globally
-- Useful for simpler setups or backward compatibility
+```json
+{
+  "prompt": "Run tests and deploy",
+  "gitRepo": "git@github.com:myorg/myrepo.git",
+  "gitBranch": "main",
+  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+  "environmentSecrets": {
+    "DATABASE_URL": "postgres://...",
+    "API_KEY": "sk-..."
+  }
+}
+```
+
+**How it works:**
+- SSH keys are written to the ephemeral workspace with secure permissions (0600)
+- HTTPS URLs are automatically converted to SSH format if an SSH key is provided
+- Environment variables are injected into Claude's process and written to `.env` file
+- All credentials are cleaned up automatically after request completion
+- Each request has isolated credentials, preventing cross-contamination
+
+**Benefits:**
+- Dynamic per-request credentials from orchestration system
+- No long-term storage of sensitive data in the service
+- Better security isolation between repositories
+- Flexible credential management controlled by the caller
+
+### Global SSH Key (Fallback, Optional)
+For backward compatibility, a global SSH key can be mounted at `/home/appuser/.ssh/id_rsa` via Secret Manager:
+- Set via `GIT_SSH_KEY` environment variable during deployment
+- Used only when no `sshKey` is provided in the payload
 - Configured during deployment via `scripts/gen_key.sh` and `scripts/create-secrets.sh`
 
 The service automatically detects which approach to use:
-- If a repository has a per-repo SSH key, it uses that
+- If `sshKey` is provided in payload, uses that (recommended)
 - Otherwise, falls back to the global SSH key if mounted
 - If neither is available, assumes public repository access
 

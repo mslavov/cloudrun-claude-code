@@ -1,143 +1,208 @@
-# Per-Repository SSH Deployment Keys
+# Per-Repository SSH Keys
 
-This feature allows each repository to use its own SSH deployment key for secure git operations, reducing security blast radius by isolating keys per repository.
+This document describes how SSH keys are managed for private git repository access in the Cloud Run Claude Code service.
 
-## Quick Start
+## Architecture Change
 
-### 1. Store SSH Key in Secret Manager
+**Important:** The service has moved from API-based SSH key management to a **payload-based approach**. SSH keys are now passed directly in the `/run` request payload rather than being stored in Secret Manager ahead of time.
 
-Using gcloud CLI:
+This architecture better supports orchestration systems like Agent Forge, which can dynamically provide the appropriate SSH key for each repository at request time.
+
+## How It Works
+
+### Payload-Based SSH Keys (Current Approach)
+
+When making a request to the `/run` endpoint, you can include an SSH key directly in the payload:
+
 ```bash
-# Create the secret
-gcloud secrets create ssh_myorg_myrepo --replication-policy="automatic"
-
-# Add the SSH private key
-cat ~/.ssh/id_rsa | gcloud secrets versions add ssh_myorg_myrepo --data-file=-
+curl -X POST "https://your-service-url/run" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "prompt": "Run tests and deploy",
+    "gitRepo": "git@github.com:myorg/myrepo.git",
+    "gitBranch": "main",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEpAIBAAKC...\n-----END OPENSSH PRIVATE KEY-----"
+  }'
 ```
 
-Using the API:
+The service will:
+1. Write the SSH key to the ephemeral workspace with secure permissions (0600)
+2. Configure git to use this key for the clone operation
+3. Clone the repository using SSH authentication
+4. Clean up the key automatically after the request completes
+
+### HTTPS to SSH Auto-Conversion
+
+If you provide an HTTPS URL with an SSH key, the service automatically converts it:
+
 ```bash
-curl -X POST "https://your-service-url/api/secrets" \
+curl -X POST "https://your-service-url/run" \
   -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "prompt": "Analyze this codebase",
+    "gitRepo": "https://github.com:myorg/myrepo.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+  }'
+```
+
+The service converts `https://github.com/owner/repo.git` → `git@github.com:owner/repo.git` automatically.
+
+### Global SSH Key (Fallback)
+
+For backward compatibility, the service still supports a global SSH key mounted at `/home/appuser/.ssh/id_rsa` via Secret Manager. This is optional and used only when no `sshKey` is provided in the payload.
+
+To set up a global SSH key:
+
+```bash
+# Create the secret
+gcloud secrets create GIT_SSH_KEY --replication-policy="automatic"
+
+# Add your SSH private key
+cat ~/.ssh/id_rsa | gcloud secrets versions add GIT_SSH_KEY --data-file=-
+
+# The deployment script automatically mounts this at /home/appuser/.ssh/id_rsa
+```
+
+## Security Features
+
+1. **Ephemeral Storage**: SSH keys are written only to the ephemeral workspace (`/tmp/ws-{requestId}`)
+2. **Secure Permissions**: Keys are written with 0600 permissions (readable only by the owner)
+3. **Automatic Cleanup**: Keys are deleted when the workspace is cleaned up after request completion
+4. **Isolated Per Request**: Each request has its own isolated SSH key, preventing cross-contamination
+5. **No Persistence**: Keys are never stored on disk outside the ephemeral workspace
+6. **Secure Transmission**: Keys are transmitted via HTTPS with Cloud Run IAM authentication
+
+## Integration with Orchestration Systems
+
+This payload-based approach is ideal for orchestration systems like Agent Forge:
+
+```javascript
+// Agent Forge can dynamically provide the correct SSH key
+const sshKey = await getSSHKeyForRepo(repoUrl);
+const envSecrets = await getEnvironmentForBranch(repoUrl, branch);
+
+const response = await fetch(`${serviceUrl}/run`, {
+  method: 'POST',
+  headers: {
+    'Authorization': `Bearer ${token}`,
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    prompt: userPrompt,
+    gitRepo: repoUrl,
+    gitBranch: branch,
+    sshKey: sshKey,
+    environmentSecrets: envSecrets
+  })
+});
+```
+
+Benefits:
+- **Dynamic**: Different keys for different repositories
+- **Secure**: Keys never stored long-term in the service
+- **Flexible**: Orchestrator controls key selection logic
+- **Simple**: No separate API for key management
+
+## Migration from API-Based Approach
+
+If you were using the old API-based approach (`POST /api/secrets` with `type: "ssh"`), you should migrate to the payload-based approach:
+
+**Old Approach (Deprecated):**
+```bash
+# Step 1: Store SSH key via API
+curl -X POST "https://your-service-url/api/secrets" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
     "org": "myorg",
     "repo": "myrepo",
     "type": "ssh",
-    "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
+    "secretContent": "..."
+  }'
+
+# Step 2: Use it implicitly
+curl -X POST "https://your-service-url/run" \
+  -d '{"gitRepo": "git@github.com:myorg/myrepo.git", ...}'
+```
+
+**New Approach (Current):**
+```bash
+# Single request with SSH key included
+curl -X POST "https://your-service-url/run" \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "gitRepo": "git@github.com:myorg/myrepo.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    ...
   }'
 ```
 
-### 2. Grant Service Account Access
+## Best Practices
+
+1. **Never Log SSH Keys**: Ensure your orchestration system doesn't log SSH keys
+2. **Use Deploy Keys**: Create read-only deploy keys per repository on GitHub/GitLab
+3. **Rotate Keys**: Implement key rotation in your orchestration system
+4. **Secure Transmission**: Always use HTTPS and proper authentication
+5. **Key Format**: Use OpenSSH format (generated with `ssh-keygen -t ed25519` or `ssh-keygen -t rsa`)
+
+## Generating SSH Keys
 
 ```bash
-PROJECT_ID=your-project-id
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-  --member="serviceAccount:${PROJECT_ID}-compute@developer.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
+# Generate a new ED25519 key (recommended)
+ssh-keygen -t ed25519 -C "claude-code@example.com" -f deploy_key -N ""
+
+# Or generate RSA key (for compatibility)
+ssh-keygen -t rsa -b 4096 -C "claude-code@example.com" -f deploy_key -N ""
+
+# Add the public key (deploy_key.pub) to GitHub/GitLab as a deploy key
+# Use the private key (deploy_key) in the sshKey payload field
 ```
 
-### 3. Use with /run Endpoint
-
-When calling the `/run` endpoint with a repository, the service automatically checks for a per-repository SSH key:
+## Example: Complete Workflow
 
 ```bash
+# 1. Generate deploy key
+ssh-keygen -t ed25519 -C "deploy" -f deploy_key -N ""
+
+# 2. Add public key to GitHub
+# Go to: Repository Settings → Deploy Keys → Add deploy key
+# Paste contents of deploy_key.pub
+
+# 3. Use private key in request
+SSH_KEY=$(cat deploy_key)
 curl -X POST "https://your-service-url/run" \
   -H "Content-Type: application/json" \
-  -d '{
-    "prompt": "Analyze this repository",
-    "gitRepo": "git@github.com:myorg/myrepo.git"
-  }'
+  -H "Authorization: Bearer $TOKEN" \
+  -d "{
+    \"prompt\": \"Run integration tests\",
+    \"gitRepo\": \"git@github.com:myorg/myrepo.git\",
+    \"gitBranch\": \"main\",
+    \"sshKey\": \"$SSH_KEY\",
+    \"environmentSecrets\": {
+      \"DATABASE_URL\": \"postgres://...\",
+      \"API_KEY\": \"sk-...\"
+    }
+  }"
 ```
 
-The service will:
-1. Look for `ssh_myorg_myrepo` secret in Secret Manager
-2. If found, use it for cloning the repository
-3. If not found, fall back to global SSH configuration
+## Troubleshooting
 
-## API Reference
+### "Permission denied (publickey)" Error
 
-### Secret Types
+This means the SSH key doesn't have access to the repository:
+1. Verify the public key is added to GitHub/GitLab
+2. Check that the private key matches the public key: `ssh-keygen -y -f deploy_key`
+3. Ensure the key format is correct (OpenSSH format)
 
-All secret management endpoints now support a `type` parameter:
-- `'env'` - Environment variables (default, backward compatible)
-- `'ssh'` - SSH deployment keys
+### "Repository not found" Error
 
-### Create SSH Key
+1. Check that the repository URL is correct
+2. Verify the SSH key has read access to the repository
+3. For private repositories, ensure an SSH key is provided
 
-```http
-POST /api/secrets
-Content-Type: application/json
-Authorization: Bearer TOKEN
+### HTTPS URL with SSH Key
 
-{
-  "org": "myorg",
-  "repo": "myrepo",
-  "type": "ssh",
-  "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----..."
-}
-```
-
-### List SSH Keys
-
-```http
-GET /api/secrets?type=ssh&org=myorg
-Authorization: Bearer TOKEN
-```
-
-### Get SSH Key
-
-```http
-GET /api/secrets/ssh_myorg_myrepo
-Authorization: Bearer TOKEN
-```
-
-### Update SSH Key
-
-```http
-PUT /api/secrets/ssh_myorg_myrepo
-Content-Type: application/json
-Authorization: Bearer TOKEN
-
-{
-  "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----..."
-}
-```
-
-### Delete SSH Key
-
-```http
-DELETE /api/secrets/ssh_myorg_myrepo
-Authorization: Bearer TOKEN
-```
-
-## Security Notes
-
-- SSH keys are stored with `ssh_<org>_<repo>` naming convention (all lowercase)
-- Keys are written to workspace with 0o600 permissions (readable only by owner)
-- SSH directory created with 0o700 permissions
-- Keys are automatically cleaned up with workspace after request completion
-- StrictHostKeyChecking is disabled only for ephemeral operations
-- Each request gets an isolated SSH configuration
-
-## Backward Compatibility
-
-The existing environment secret functionality remains unchanged:
-- Environment secrets continue using `env_<org>_<repo>` naming
-- The `type` parameter defaults to `'env'` when omitted
-- `envContent` field is still supported for backward compatibility
-- Branch-specific environment secrets continue to work as before
-
-## Key Rotation
-
-To rotate an SSH key:
-
-```bash
-# Add new version
-gcloud secrets versions add ssh_myorg_myrepo --data-file=new_key.pem
-
-# Optionally disable old versions
-gcloud secrets versions disable ssh_myorg_myrepo 1
-```
-
-The service automatically uses the latest version of each secret.
+The service automatically converts HTTPS to SSH format when an SSH key is provided, so this should work seamlessly. If it doesn't:
+1. Check that the URL is a valid GitHub URL
+2. Manually convert to SSH format: `git@github.com:owner/repo.git`

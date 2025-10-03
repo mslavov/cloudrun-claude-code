@@ -91,41 +91,6 @@ curl https://your-service-url/health?verbose=true
 # Note: Both /health and /healthz endpoints work identically
 ```
 
-### Secret Management API
-
-The service includes a RESTful API for managing environment secrets:
-
-```bash
-# List all secrets
-curl https://your-service-url/api/secrets/list?org=myorg&repo=myrepo
-
-# Get secret content for a repository
-curl https://your-service-url/api/secrets/get?gitRepo=git@github.com:myorg/myrepo.git&gitBranch=main
-
-# Create a new secret
-curl -X POST https://your-service-url/api/secrets/create \
-  -H "Content-Type: application/json" \
-  -d '{
-    "org": "myorg",
-    "repo": "myrepo",
-    "branch": "customers/acme/main",
-    "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=..."
-  }'
-
-# Update an existing secret
-curl -X PUT https://your-service-url/api/secrets/update \
-  -H "Content-Type: application/json" \
-  -d '{
-    "org": "myorg",
-    "repo": "myrepo",
-    "branch": "staging",
-    "envContent": "DATABASE_URL=postgres://...\nAPI_KEY=..."
-  }'
-
-# Delete a secret
-curl -X DELETE "https://your-service-url/api/secrets/delete?org=myorg&repo=myrepo&branch=staging"
-```
-
 ### Run Agent
 
 ```bash

@@ -27,7 +27,7 @@ async function getIdentityToken() {
     credentials: serviceAccount,
     scopes: ['https://www.googleapis.com/auth/cloud-platform']
   });
-  
+
   const client = await auth.getIdTokenClient('https://YOUR-SERVICE-URL.run.app');
   const tokenResponse = await client.getAccessToken();
   return tokenResponse.token;
@@ -60,7 +60,7 @@ def get_identity_token():
         service_account_info,
         target_audience='https://YOUR-SERVICE-URL.run.app'
     )
-    
+
     request = Request()
     credentials.refresh(request)
     return credentials.token
@@ -104,219 +104,9 @@ curl -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
 
 ## Endpoints
 
-### Secret Management Endpoints
-
-The service provides a RESTful API for managing environment secrets that are automatically loaded when cloning git repositories.
-
-#### GET /api/secrets
-
-List all secrets, optionally filtered by organization, repository, and type.
-
-**Query Parameters:**
-- `org` (string, optional): Filter by organization name
-- `repo` (string, optional): Filter by repository name
-- `type` (string, optional): Secret type - 'env' or 'ssh' (defaults to all types)
-
-**Response:**
-```json
-{
-  "secrets": [
-    "env_myorg_myrepo",
-    "env_myorg_myrepo_staging",
-    "env_myorg_myrepo_customers__acme__main",
-    "ssh_myorg_myrepo"
-  ]
-}
-```
-
-**Example:**
-```bash
-# List all secrets
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://YOUR-SERVICE-URL/api/secrets"
-
-# List only environment secrets for an org
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://YOUR-SERVICE-URL/api/secrets?type=env&org=myorg"
-```
-
-#### GET /api/secrets/:id
-
-Get a specific secret by its ID.
-
-**Path Parameters:**
-- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
-  - Examples: `env_myorg_myrepo`, `ssh_myorg_backend`, `env_myorg_api_staging`
-
-**Response:**
-
-For environment secrets (type=env):
-```json
-{
-  "id": "env_myorg_myrepo_staging",
-  "type": "env",
-  "org": "myorg",
-  "repo": "myrepo",
-  "branch": "staging",
-  "env": {
-    "DATABASE_URL": "postgres://...",
-    "API_KEY": "..."
-  }
-}
-```
-
-For SSH keys (type=ssh):
-```json
-{
-  "id": "ssh_myorg_myrepo",
-  "type": "ssh",
-  "org": "myorg",
-  "repo": "myrepo",
-  "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
-}
-```
-
-**Example:**
-```bash
-# Get environment variables for main branch
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo"
-
-# Get SSH key
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo"
-
-# Get branch-specific environment
-curl -H "Authorization: Bearer $TOKEN" \
-  "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_customers__acme"
-```
-
-#### POST /api/secrets
-
-Create a new secret.
-
-**Request Body:**
-```json
-{
-  "org": "myorg",
-  "repo": "myrepo",
-  "type": "env",
-  "branch": "customers/acme/main",
-  "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
-}
-```
-
-**Parameters:**
-- `org` (string, required): Organization name
-- `repo` (string, required): Repository name
-- `type` (string, optional): Secret type - 'env' or 'ssh' (defaults to 'env')
-- `branch` (string, optional): Branch name for environment secrets
-- `secretContent` (string, required): The secret content (environment variables or SSH key)
-
-**Response:**
-```json
-{
-  "success": true,
-  "secretName": "env_myorg_myrepo_customers__acme__main"
-}
-```
-
-**Status Codes:**
-- `201 Created`: Secret successfully created
-- `400 Bad Request`: Invalid parameters
-
-**Examples:**
-
-```bash
-# Create environment secret
-curl -X POST "https://YOUR-SERVICE-URL/api/secrets" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "org": "myorg",
-    "repo": "backend",
-    "type": "env",
-    "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
-  }'
-
-# Create SSH deployment key
-curl -X POST "https://YOUR-SERVICE-URL/api/secrets" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "org": "myorg",
-    "repo": "backend",
-    "type": "ssh",
-    "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----"
-  }'
-```
-
-#### PUT /api/secrets/:id
-
-Update an existing secret.
-
-**Path Parameters:**
-- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
-
-**Request Body:**
-```json
-{
-  "secretContent": "DATABASE_URL=postgres://...\nAPI_KEY=sk-..."
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "version": "2"
-}
-```
-
-**Example:**
-```bash
-# Update environment variables
-curl -X PUT "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_staging" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "secretContent": "DATABASE_URL=postgres://new...\nAPI_KEY=sk-new..."
-  }'
-
-# Update SSH key
-curl -X PUT "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo" \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "secretContent": "-----BEGIN OPENSSH PRIVATE KEY-----\n...new key...\n-----END OPENSSH PRIVATE KEY-----"
-  }'
-```
-
-#### DELETE /api/secrets/:id
-
-Delete a secret.
-
-**Path Parameters:**
-- `id` (string, required): Secret ID in format `{type}_{org}_{repo}[_{branch}]`
-
-**Response:**
-- `204 No Content`: Secret successfully deleted
-- `404 Not Found`: Secret does not exist
-
-**Example:**
-```bash
-# Delete environment secret
-curl -X DELETE "https://YOUR-SERVICE-URL/api/secrets/env_myorg_myrepo_staging" \
-  -H "Authorization: Bearer $TOKEN"
-
-# Delete SSH key
-curl -X DELETE "https://YOUR-SERVICE-URL/api/secrets/ssh_myorg_myrepo" \
-  -H "Authorization: Bearer $TOKEN"
-```
-
 ### POST /run
 
-Execute a Claude Code prompt with streaming response, optionally cloning a git repository and loading runtime environment variables.
+Execute a Claude Code prompt with streaming response, optionally cloning a git repository with environment variables and SSH authentication.
 
 #### Request
 
@@ -339,9 +129,45 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `fallbackModel` | string | No | - | Fallback model if primary fails |
 | `useNamedPipe` | boolean | No | true | Use named pipe for prompt delivery |
 | `timeoutMinutes` | number | No | 55 | Process timeout in minutes (max 60 per Cloud Run) |
-| `gitRepo` | string | No | - | SSH git repository URL to clone (e.g., `git@github.com:user/repo.git`) |
+| `gitRepo` | string | No | - | Git repository URL to clone (SSH or HTTPS) |
 | `gitBranch` | string | No | main | Git branch to checkout |
 | `gitDepth` | number | No | 1 | Clone depth for shallow cloning |
+| `environmentSecrets` | object | No | {} | Environment variables to inject as key-value pairs |
+| `sshKey` | string | No | - | SSH private key for git authentication (PEM format) |
+| `metadata` | object | No | - | Optional metadata for logging/tracking |
+
+#### SSH Key and Environment Variables
+
+The service supports passing SSH keys and environment variables directly in the request payload. This is the recommended approach when integrating with orchestration systems like Agent Forge.
+
+**SSH Key Format:**
+```json
+{
+  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEpAIBAAKC...\n-----END OPENSSH PRIVATE KEY-----"
+}
+```
+
+**Environment Secrets Format:**
+```json
+{
+  "environmentSecrets": {
+    "DATABASE_URL": "postgres://...",
+    "API_KEY": "sk-...",
+    "REDIS_URL": "redis://..."
+  }
+}
+```
+
+When both `sshKey` and `gitRepo` are provided:
+- The SSH key is written to the workspace with proper permissions (0600)
+- HTTPS URLs are automatically converted to SSH format if an SSH key is provided
+- Git operations use the provided SSH key for authentication
+- The key is cleaned up automatically after request completion
+
+Environment secrets are:
+- Injected as environment variables for the Claude process
+- Written to `.env` file in the workspace root
+- Available to any scripts or commands Claude executes
 
 #### Response
 
@@ -468,7 +294,21 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   }'
 ```
 
-### With Git Repository Clone
+### With Git Repository Clone (Public Repository)
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Analyze the code structure and suggest improvements",
+    "gitRepo": "https://github.com/user/public-repo.git",
+    "gitBranch": "main",
+    "gitDepth": 1
+  }'
+```
+
+### With Private Repository and SSH Key
 
 ```bash
 curl -X POST https://YOUR-SERVICE-URL.run.app/run \
@@ -476,15 +316,14 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Run tests and fix any failing ones",
-    "gitRepo": "git@github.com:myorg/myproject.git",
+    "gitRepo": "git@github.com:myorg/private-repo.git",
     "gitBranch": "feature-branch",
-    "gitDepth": 1
+    "gitDepth": 1,
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\nMIIEpAIBAAKCAQEA...\n-----END OPENSSH PRIVATE KEY-----"
   }'
 ```
 
-**Note**: Requires SSH key to be configured as a secret (`GIT_SSH_KEY`) and mounted to the container at `/home/appuser/.ssh/id_rsa`.
-
-### With Automatic Environment Variables
+### With Environment Variables
 
 ```bash
 curl -X POST https://YOUR-SERVICE-URL.run.app/run \
@@ -492,16 +331,45 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
     "prompt": "Test database connectivity and run migrations",
-    "gitRepo": "git@github.com:myorg/myproject.git",
-    "gitBranch": "staging"
+    "gitRepo": "git@github.com:myorg/backend.git",
+    "gitBranch": "staging",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://staging.example.com/db",
+      "API_KEY": "sk-staging-...",
+      "REDIS_URL": "redis://staging.example.com:6379"
+    }
   }'
 ```
 
-**Note**: Environment variables are automatically loaded based on the repository URL using hierarchical resolution:
-- `env_{org}_{repo}` - Default environment for the repository
-- `env_{org}_{repo}_{branch}` - Branch-specific environment (branch slashes replaced with `__`)
+### Complete Example with All Options
 
-The service uses hierarchical resolution, trying from most specific to least specific secret, allowing inheritance of common variables.
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run integration tests and deploy to staging",
+    "gitRepo": "https://github.com/myorg/app.git",
+    "gitBranch": "develop",
+    "gitDepth": 1,
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://...",
+      "API_KEY": "sk-...",
+      "DEPLOY_TOKEN": "..."
+    },
+    "allowedTools": ["Read", "Grep", "Bash", "Write"],
+    "permissionMode": "bypassPermissions",
+    "maxTurns": 15,
+    "timeoutMinutes": 45,
+    "metadata": {
+      "requestId": "deploy-123",
+      "user": "agent-forge",
+      "environment": "staging"
+    }
+  }'
+```
 
 ## Client Examples
 
@@ -519,7 +387,7 @@ async function getIdentityToken(targetUrl) {
     credentials: serviceAccount,
     scopes: ['https://www.googleapis.com/auth/cloud-platform']
   });
-  
+
   const client = await auth.getIdTokenClient(targetUrl);
   const tokenResponse = await client.getAccessToken();
   return tokenResponse.token;
@@ -528,7 +396,7 @@ async function getIdentityToken(targetUrl) {
 async function runClaudeCode(prompt, options = {}) {
   const serviceUrl = 'https://YOUR-SERVICE-URL.run.app';
   const identityToken = await getIdentityToken(serviceUrl);
-  
+
   const response = await fetch(`${serviceUrl}/run`, {
     method: 'POST',
     headers: {
@@ -547,10 +415,10 @@ async function runClaudeCode(prompt, options = {}) {
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
-    
+
     const chunk = decoder.decode(value);
-    const lines = chunk.split('\n');
-    
+    const lines = chunk.split('\\n');
+
     for (const line of lines) {
       if (line.startsWith('data: ')) {
         const data = line.slice(6);
@@ -564,10 +432,20 @@ async function runClaudeCode(prompt, options = {}) {
   }
 }
 
-// Usage
-runClaudeCode('Create a React component for a todo list', {
-  allowedTools: ['Write', 'Edit'],
-  permissionMode: 'acceptEdits'
+// Usage with git repository and SSH key
+const sshKey = fs.readFileSync('.ssh/deploy_key', 'utf8');
+const envSecrets = {
+  DATABASE_URL: 'postgres://...',
+  API_KEY: 'sk-...'
+};
+
+runClaudeCode('Run tests and fix any failures', {
+  gitRepo: 'git@github.com:myorg/repo.git',
+  gitBranch: 'main',
+  sshKey: sshKey,
+  environmentSecrets: envSecrets,
+  allowedTools: ['Read', 'Write', 'Edit', 'Bash'],
+  permissionMode: 'bypassPermissions'
 });
 ```
 
@@ -589,7 +467,7 @@ def get_identity_token(target_url):
         service_account_info,
         target_audience=target_url
     )
-    
+
     request = Request()
     credentials.refresh(request)
     return credentials.token
@@ -597,24 +475,24 @@ def get_identity_token(target_url):
 def run_claude_code(prompt, **options):
     service_url = 'https://YOUR-SERVICE-URL.run.app'
     token = get_identity_token(service_url)
-    
+
     payload = {
         'prompt': prompt,
         **options
     }
-    
+
     headers = {
         'Content-Type': 'application/json',
         'Authorization': f'Bearer {token}'
     }
-    
+
     response = requests.post(
         f'{service_url}/run',
         json=payload,
         headers=headers,
         stream=True
     )
-    
+
     for line in response.iter_lines():
         if line:
             line = line.decode('utf-8')
@@ -625,11 +503,23 @@ def run_claude_code(prompt, **options):
                 else:
                     print(data)
 
-# Usage
+# Usage with git repository and SSH key
+with open('.ssh/deploy_key', 'r') as f:
+    ssh_key = f.read()
+
+env_secrets = {
+    'DATABASE_URL': 'postgres://...',
+    'API_KEY': 'sk-...'
+}
+
 run_claude_code(
-    'Optimize this Python function for performance',
-    allowedTools=['Read', 'Edit'],
-    maxTurns=10
+    'Run tests and fix any failures',
+    gitRepo='git@github.com:myorg/repo.git',
+    gitBranch='main',
+    sshKey=ssh_key,
+    environmentSecrets=env_secrets,
+    allowedTools=['Read', 'Write', 'Edit', 'Bash'],
+    permissionMode='bypassPermissions'
 )
 
 # Required packages:
@@ -732,12 +622,14 @@ pip install google-auth google-auth-httplib2 requests
 
 ## Best Practices
 
-1. **Use Named Pipes for Large Prompts**: Set `useNamedPipe: true` (default) for prompts over 1KB
-2. **Set Appropriate Timeouts**: Increase `timeoutMinutes` for complex tasks
-3. **Restrict Tools for Security**: Use `allowedTools` to limit permissions
-4. **Handle Streaming Properly**: Implement proper SSE parsing in clients
-5. **Use Plan Mode for Review**: Set `permissionMode: "plan"` to preview changes
-6. **Monitor Health Endpoint**: Regularly check `/health` for service status
+1. **Pass Secrets in Payload**: For orchestration systems, pass SSH keys and environment variables directly in the request payload
+2. **Use Named Pipes for Large Prompts**: Set `useNamedPipe: true` (default) for prompts over 1KB
+3. **Set Appropriate Timeouts**: Increase `timeoutMinutes` for complex tasks
+4. **Restrict Tools for Security**: Use `allowedTools` to limit permissions
+5. **Handle Streaming Properly**: Implement proper SSE parsing in clients
+6. **Use Plan Mode for Review**: Set `permissionMode: "plan"` to preview changes
+7. **Monitor Health Endpoint**: Regularly check `/health` for service status
+8. **SSH Key Security**: Ensure SSH keys are transmitted securely and never logged
 
 ## Security Considerations
 
@@ -748,6 +640,9 @@ pip install google-auth google-auth-httplib2 requests
 5. **Set appropriate timeouts to prevent resource exhaustion**
 6. **Use private Cloud Run endpoints when possible**
 7. **Enable Cloud Run authentication for production**
+8. **SSH keys are ephemeral and cleaned up after each request**
+9. **Environment secrets are isolated per request**
+10. **All credentials are stored in memory only, never on disk (except ephemeral workspace)**
 
 ## Workspace Management
 
@@ -757,127 +652,84 @@ Each request creates an ephemeral workspace at `/tmp/ws-{requestId}` that is:
 - Limited to the request's lifecycle
 - Not persisted between requests
 - Can be initialized with a git repository using `gitRepo` parameter
-- Can include runtime environment variables via automatic secret loading
+- Can include runtime environment variables via `environmentSecrets` parameter
+- Can use SSH authentication via `sshKey` parameter
 
 To work with persistent data, consider:
 - Mounting Cloud Storage buckets
 - Using environment variables for configuration
+- Committing changes back to git repositories
 
 ## Git Repository Support
 
-The service supports cloning git repositories into the workspace:
+The service supports cloning git repositories into the workspace with flexible authentication:
 
 ### SSH Key Configuration
 
-1. **Create SSH Key Secret**:
-   ```bash
-   # Generate SSH key pair if needed
-   ssh-keygen -t ed25519 -C "claude-code@example.com" -f claude_key
-   
-   # Create secret in Google Cloud
-   gcloud secrets create GIT_SSH_KEY \
-     --data-file=claude_key \
-     --project=YOUR-PROJECT-ID
-   ```
+**Payload-Based (Recommended for Orchestration):**
+Pass SSH keys directly in the request payload. The service will:
+1. Write the key to the workspace with secure permissions (0600)
+2. Configure git to use the key for the clone operation
+3. Automatically convert HTTPS URLs to SSH format if an SSH key is provided
+4. Clean up the key after request completion
 
-2. **Add Public Key to Git Provider**:
-   - GitHub: Settings → SSH and GPG keys → New SSH key
-   - GitLab: Settings → SSH Keys
-   - Bitbucket: Personal settings → SSH keys
+**Global SSH Key (Optional):**
+For backward compatibility, you can mount a global SSH key at `/home/appuser/.ssh/id_rsa` via Secret Manager. This key will be used as a fallback if no `sshKey` is provided in the payload.
 
-3. **Deploy with SSH Key Mounted**:
-   The deployment script automatically mounts the SSH key at `/home/appuser/.ssh/id_rsa`
+### HTTPS to SSH Conversion
 
-### Dynamic Environment Secrets
+When an SSH key is provided but the `gitRepo` uses HTTPS format, the service automatically converts:
+```
+https://github.com/owner/repo.git → git@github.com:owner/repo.git
+```
 
-Environment variables are now fetched dynamically based on the repository URL. The service uses underscores as separators and supports hierarchical resolution:
+This allows seamless authentication without manual URL conversion.
 
-**Naming Convention:**
-- `env_{org}_{repo}` - Default environment for a repository
-- `env_{org}_{repo}_{branch}` - Branch-specific environment (branch slashes replaced with `__`)
+### Environment Variables
 
-**Examples:**
-- Repository default: `env_mycompany_backend`
-- Main branch: `env_mycompany_backend` (uses repository default)
-- Feature branch: `env_mycompany_backend_feature__auth`
-- Customer branch: `env_mycompany_backend_customers__acme__main`
+Environment variables can be passed directly in the request payload:
 
-**Hierarchical Resolution:**
-For complex branch structures like `customers/acme/feature/auth`, the service tries:
-1. `env_mycompany_backend_customers__acme__feature__auth` (most specific)
-2. `env_mycompany_backend_customers__acme__feature`
-3. `env_mycompany_backend_customers__acme`
-4. `env_mycompany_backend_customers`
-5. `env_mycompany_backend` (repository default)
+**Payload-Based (Recommended):**
+```json
+{
+  "environmentSecrets": {
+    "DATABASE_URL": "postgres://...",
+    "API_KEY": "sk-..."
+  }
+}
+```
 
-This allows you to define common environment variables at higher levels and override specific ones at branch levels.
+The service:
+- Injects these as environment variables for the Claude process
+- Writes them to a `.env` file in the workspace root
+- Makes them available to any scripts or commands Claude executes
+- Cleans them up automatically after request completion
 
-#### Managing Environment Secrets via API
+### Example: Full Git + SSH + Environment Setup
 
 ```bash
-# Create repository-level secret
-curl -X POST https://YOUR-SERVICE-URL/api/secrets \
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
-    "org": "mycompany",
-    "repo": "backend",
-    "type": "env",
-    "secretContent": "DATABASE_URL=postgres://prod...\nAPI_KEY=sk-prod..."
+    "prompt": "Run integration tests",
+    "gitRepo": "https://github.com/myorg/backend.git",
+    "gitBranch": "staging",
+    "gitDepth": 1,
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://staging.db.example.com/mydb",
+      "API_KEY": "sk-staging-key",
+      "REDIS_URL": "redis://staging.cache.example.com:6379"
+    }
   }'
-
-# Create customer-specific secret
-curl -X POST https://YOUR-SERVICE-URL/api/secrets \
-  -H "Content-Type: application/json" \
-  -H "Authorization: Bearer $TOKEN" \
-  -d '{
-    "org": "mycompany",
-    "repo": "backend",
-    "type": "env",
-    "branch": "customers/acme",
-    "secretContent": "DATABASE_URL=postgres://acme...\nCUSTOMER_ID=acme"
-  }'
-
-# The service will automatically inherit from parent levels
 ```
 
-#### Direct Management with gcloud
-
-```bash
-# Create environment secret with new naming convention
-cat .env | gcloud secrets create env_mycompany_backend \
-  --data-file=- \
-  --project=YOUR-PROJECT-ID \
-  --labels="type=env,org=mycompany,repo=backend"
-
-# Create branch-specific secret
-cat .env.staging | gcloud secrets create env_mycompany_backend_staging \
-  --data-file=- \
-  --project=YOUR-PROJECT-ID
-
-# Create customer-specific secret
-cat .env.customer | gcloud secrets create env_mycompany_backend_customers__acme \
-  --data-file=- \
-  --project=YOUR-PROJECT-ID
-
-# Update secret version
-cat .env | gcloud secrets versions add env_mycompany_backend \
-  --data-file=- \
-  --project=YOUR-PROJECT-ID
-```
-
-The service automatically:
-- Parses the repository URL to determine org/repo
-- Fetches the appropriate secret from Secret Manager
-- Falls back from branch-specific to repository default
-- Writes to workspace as `.env`
-- Injects as environment variables for Claude
-
-#### Required IAM Permissions
-
-The Cloud Run service account needs:
-```bash
-gcloud projects add-iam-policy-binding YOUR-PROJECT-ID \
-  --member="serviceAccount:YOUR-SERVICE-ACCOUNT@YOUR-PROJECT-ID.iam.gserviceaccount.com" \
-  --role="roles/secretmanager.secretAccessor"
-```
+The service will:
+1. Accept the HTTPS URL and automatically convert it to SSH format
+2. Write the SSH key securely to the workspace
+3. Clone the repository using SSH authentication
+4. Write environment variables to `.env` file
+5. Inject environment variables into Claude's process
+6. Execute the prompt with full repository and environment access
+7. Clean up all sensitive data after completion

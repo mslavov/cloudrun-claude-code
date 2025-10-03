@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
 import { execSync } from "child_process";
+import { logger } from "../../utils/logger.js";
 
 export class WorkspaceService {
   // Create a new workspace directory owned by claudeuser
@@ -15,7 +16,7 @@ export class WorkspaceService {
     try {
       execSync(`chown -R 1002:1002 "${workspaceRoot}"`, { stdio: 'pipe' });
     } catch (err) {
-      console.warn('Warning: Could not change workspace ownership to claudeuser:', err);
+      logger.warn('Warning: Could not change workspace ownership to claudeuser:', err);
     }
 
     return workspaceRoot;
@@ -60,7 +61,7 @@ export class WorkspaceService {
     // Write the key file with restricted permissions
     await fs.writeFile(keyPath, keyContent, { mode: 0o600 });
 
-    console.log(`✓ SSH key written to ${keyPath} (${keyContent.length} bytes)`);
+    logger.debug(`✓ SSH key written to ${keyPath} (${keyContent.length} bytes)`);
     return keyPath;
   }
 
@@ -68,7 +69,7 @@ export class WorkspaceService {
   cleanupWorkspace(workspaceRoot: string, delayMs: number = 5000): void {
     setTimeout(() => {
       fs.rm(workspaceRoot, { recursive: true, force: true }).catch((err) => {
-        console.error(`Failed to clean up workspace ${workspaceRoot}:`, err);
+        logger.error(`Failed to clean up workspace ${workspaceRoot}:`, err);
       });
     }, delayMs);
   }
@@ -78,7 +79,7 @@ export class WorkspaceService {
     try {
       await fs.rm(workspaceRoot, { recursive: true, force: true });
     } catch (err) {
-      console.error(`Failed to clean up workspace ${workspaceRoot}:`, err);
+      logger.error(`Failed to clean up workspace ${workspaceRoot}:`, err);
     }
   }
 }

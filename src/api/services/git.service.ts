@@ -1,4 +1,5 @@
 import simpleGit, { SimpleGit } from "simple-git";
+import { logger } from "../../utils/logger.js";
 
 export interface GitCloneOptions {
   gitRepo: string;
@@ -47,9 +48,9 @@ export class GitService {
     const isHttps = gitRepo.startsWith('http://') || gitRepo.startsWith('https://');
     const isSsh = gitRepo.startsWith('git@');
 
-    console.log(`Cloning repository: ${gitRepo} (branch: ${branch}, depth: ${depth}, protocol: ${isHttps ? 'HTTPS' : 'SSH'})`);
+    logger.debug(`Cloning repository: ${gitRepo} (branch: ${branch}, depth: ${depth}, protocol: ${isHttps ? 'HTTPS' : 'SSH'})`);
     if (sshKeyPath) {
-      console.log(`Using SSH key: ${sshKeyPath}`);
+      logger.debug(`Using SSH key: ${sshKeyPath}`);
     }
 
     try {
@@ -85,10 +86,10 @@ export class GitService {
       });
 
       await Promise.race([clonePromise, timeoutPromise]);
-      console.log("✓ Repository cloned successfully");
+      logger.debug("✓ Repository cloned successfully");
     } catch (error: any) {
       // Log the actual error for debugging
-      console.error("Git clone failed with error:", error.message);
+      logger.error("Git clone failed with error:", error.message);
       
       // Provide more helpful error messages
       let errorMessage = error.message;

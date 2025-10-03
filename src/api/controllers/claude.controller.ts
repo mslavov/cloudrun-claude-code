@@ -5,6 +5,7 @@ import { GitService } from "../services/git.service.js";
 import { WorkspaceService } from "../services/workspace.service.js";
 import { SimpleAnthropicProxy } from "../services/simple-proxy.js";
 import { RunRequest } from "../types/request.types.js";
+import { logger } from "../../utils/logger.js";
 
 export class ClaudeController {
   private gitService: GitService;
@@ -16,7 +17,7 @@ export class ClaudeController {
   }
 
   async runClaude(req: Request<{}, {}, RunRequest>, res: Response): Promise<void> {
-    console.log("POST /run - Request received");
+    logger.debug("POST /run - Request received");
     const {
       prompt,
       anthropicApiKey,
@@ -40,7 +41,7 @@ export class ClaudeController {
       metadata
     } = req.body || {};
 
-    console.log("Request body:", {
+    logger.debug("Request body:", {
       prompt: prompt?.substring(0, 50) + "...",
       maxTurns,
       allowedTools,
@@ -56,13 +57,13 @@ export class ClaudeController {
     });
 
     if (!prompt) {
-      console.error("Missing prompt in request");
+      logger.error("Missing prompt in request");
       res.status(400).json({ error: "prompt is required" });
       return;
     }
 
     if (!anthropicApiKey && !anthropicOAuthToken) {
-      console.error("Missing authentication - need either anthropicApiKey or anthropicOAuthToken");
+      logger.error("Missing authentication - need either anthropicApiKey or anthropicOAuthToken");
       res.status(400).json({
         error: "Either anthropicApiKey or anthropicOAuthToken is required"
       });
@@ -78,7 +79,7 @@ export class ClaudeController {
       proxy = new SimpleAnthropicProxy(anthropicApiKey, anthropicOAuthToken);
       await proxy.start();
       const proxyPort = proxy.getPort();
-      console.log(`✓ Token proxy started on 127.0.0.1:${proxyPort}`);
+      logger.debug(`✓ Token proxy started on 127.0.0.1:${proxyPort}`);
 
       // Small delay to ensure proxy is fully ready to accept connections
       await new Promise(resolve => setTimeout(resolve, 100));
@@ -93,29 +94,29 @@ export class ClaudeController {
         let repoUrlToUse = gitRepo;
 
         if (sshKey) {
-          console.log(`✓ SSH key provided in payload (${sshKey.length} bytes)`);
+          logger.debug(`✓ SSH key provided in payload (${sshKey.length} bytes)`);
 
           try {
             sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
-            console.log(`✓ SSH key written to: ${sshKeyPath}`);
+            logger.debug(`✓ SSH key written to: ${sshKeyPath}`);
           } catch (error: any) {
-            console.error(`Failed to write SSH key: ${error.message}`);
+            logger.error(`Failed to write SSH key: ${error.message}`);
             throw error;
           }
 
           // Convert HTTPS URLs to SSH format if we have an SSH key
           if (gitRepo.startsWith('http://') || gitRepo.startsWith('https://')) {
             repoUrlToUse = this.gitService.convertHttpsToSsh(gitRepo);
-            console.log(`✓ Converted HTTPS URL to SSH format: ${gitRepo} -> ${repoUrlToUse}`);
+            logger.debug(`✓ Converted HTTPS URL to SSH format: ${gitRepo} -> ${repoUrlToUse}`);
           }
         } else {
-          console.log(`No SSH key provided in payload`);
+          logger.debug(`No SSH key provided in payload`);
 
           // For SSH URLs without a key, this will fail
           if (gitRepo.startsWith('git@')) {
-            console.log(`SSH URL requires authentication but no SSH key available`);
+            logger.debug(`SSH URL requires authentication but no SSH key available`);
           } else {
-            console.log(`Attempting public HTTPS clone`);
+            logger.debug(`Attempting public HTTPS clone`);
           }
         }
 
@@ -138,7 +139,7 @@ export class ClaudeController {
 
       // Use environment secrets from payload (provided by Agent Forge)
       if (Object.keys(environmentSecrets).length > 0) {
-        console.log(`✓ Using ${Object.keys(environmentSecrets).length} environment secrets from payload`);
+        logger.debug(`✓ Using ${Object.keys(environmentSecrets).length} environment secrets from payload`);
 
         // Optionally write to .env file for applications that expect it
         const envContent = Object.entries(environmentSecrets)
@@ -183,7 +184,7 @@ export class ClaudeController {
         claudeEnv
       };
 
-      console.log("Setting up SSE headers");
+      logger.debug("Setting up SSE headers");
       res.setHeader("Content-Type", "text/event-stream");
       res.setHeader("Cache-Control", "no-cache");
       res.setHeader("Connection", "keep-alive");
@@ -193,12 +194,12 @@ export class ClaudeController {
 
       // Handle client disconnect
       req.on("close", () => {
-        console.log("Client disconnected, killing Claude process");
+        logger.debug("Client disconnected, killing Claude process");
         connectionClosed = true;
         runner.kill();
       });
 
-      console.log(`Starting Claude CLI (${useNamedPipe ? 'with named pipe' : 'direct stdin'})`);
+      logger.debug(`Starting Claude CLI (${useNamedPipe ? 'with named pipe' : 'direct stdin'})`);
 
       // Data handler for streaming
       const onData = (line: string) => {
@@ -206,7 +207,7 @@ export class ClaudeController {
 
         // Log Claude output to console if enabled
         if (process.env.LOG_CLAUDE_OUTPUT === 'true' && line.trim()) {
-          console.log('[CLAUDE OUTPUT]', line);
+          logger.debug('[CLAUDE OUTPUT]', line);
         }
 
         try {
@@ -236,7 +237,7 @@ export class ClaudeController {
         ? await runner.runWithPipe(prompt, options, onData, onError)
         : await runner.runDirect(prompt, options, onData, onError);
 
-      console.log(`Claude process completed with exit code: ${result.exitCode}`);
+      logger.debug(`Claude process completed with exit code: ${result.exitCode}`);
 
       if (result.exitCode !== 0) {
         res.write(`event: error\ndata: ${JSON.stringify({
@@ -248,7 +249,7 @@ export class ClaudeController {
       res.end();
 
     } catch (err: any) {
-      console.error("Error:", err.message, err.stack);
+      logger.error("Error:", err.message, err.stack);
 
       // If headers not sent yet, send error response
       if (!res.headersSent) {

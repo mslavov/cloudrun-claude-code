@@ -5,6 +5,7 @@ import { unlink, writeFile, access } from "fs/promises";
 import { createWriteStream } from "fs";
 import { constants } from "fs";
 import path from "path";
+import { logger } from "./utils/logger.js";
 
 const execAsync = promisify(exec);
 
@@ -95,10 +96,10 @@ export class ClaudeRunner {
     try {
       await access(mcpConfigPath, constants.R_OK);
       claudeArgs.push("--mcp-config", ".mcp.json");
-      console.log("✓ Found .mcp.json in workspace, loading MCP configuration");
+      logger.debug("✓ Found .mcp.json in workspace, loading MCP configuration");
     } catch {
       // .mcp.json doesn't exist or isn't readable - that's fine
-      console.log("No .mcp.json found in workspace, skipping MCP configuration");
+      logger.debug("No .mcp.json found in workspace, skipping MCP configuration");
     }
 
     return claudeArgs;
@@ -117,7 +118,7 @@ export class ClaudeRunner {
     await this.createNamedPipe();
 
     const claudeArgs = await this.buildArgs(options);
-    console.log("Starting Claude with args:", claudeArgs);
+    logger.debug("Starting Claude with args:", claudeArgs);
 
     // Build environment - SECURITY: Only pass explicitly defined variables
     // DO NOT spread process.env to prevent token leakage
@@ -140,7 +141,7 @@ export class ClaudeRunner {
     catProcess.stdout?.pipe(pipeStream);
 
     catProcess.on("error", (error) => {
-      console.error("Error reading prompt file:", error);
+      logger.error("Error reading prompt file:", error);
       pipeStream.destroy();
     });
 
@@ -157,7 +158,7 @@ export class ClaudeRunner {
 
     // Handle process errors
     this.process.on("error", (error) => {
-      console.error("Error spawning Claude process:", error);
+      logger.error("Error spawning Claude process:", error);
       pipeStream.destroy();
       onError(`Failed to start Claude CLI: ${error.message}`);
     });
@@ -180,7 +181,7 @@ export class ClaudeRunner {
 
     this.process.stderr?.on("data", (data) => {
       errorOutput += data.toString();
-      console.error("Claude stderr:", data.toString());
+      logger.error("Claude stderr:", data.toString());
     });
 
     // Pipe from named pipe to Claude
@@ -188,7 +189,7 @@ export class ClaudeRunner {
     pipeProcess.stdout?.pipe(this.process.stdin!);
 
     pipeProcess.on("error", (error) => {
-      console.error("Error reading from named pipe:", error);
+      logger.error("Error reading from named pipe:", error);
       this.kill();
     });
 
@@ -200,7 +201,7 @@ export class ClaudeRunner {
 
       const timeoutId = setTimeout(() => {
         if (!resolved) {
-          console.error(`Claude process timed out after ${timeoutMs / 1000} seconds`);
+          logger.error(`Claude process timed out after ${timeoutMs / 1000} seconds`);
           this.kill();
           resolved = true;
           resolve({
@@ -256,7 +257,7 @@ export class ClaudeRunner {
     onError: (error: string) => void
   ): Promise<ClaudeRunResult> {
     const claudeArgs = await this.buildArgs(options);
-    console.log("Starting Claude with args:", claudeArgs);
+    logger.debug("Starting Claude with args:", claudeArgs);
 
     // Build environment - SECURITY: Only pass explicitly defined variables
     // DO NOT spread process.env to prevent token leakage
@@ -288,7 +289,7 @@ export class ClaudeRunner {
 
     // Handle process errors
     this.process.on("error", (error) => {
-      console.error("Error spawning Claude process:", error);
+      logger.error("Error spawning Claude process:", error);
       onError(`Failed to start Claude CLI: ${error.message}`);
     });
 
@@ -310,7 +311,7 @@ export class ClaudeRunner {
 
     this.process.stderr?.on("data", (data) => {
       errorOutput += data.toString();
-      console.error("Claude stderr:", data.toString());
+      logger.error("Claude stderr:", data.toString());
     });
 
     // Wait for completion with timeout
@@ -321,7 +322,7 @@ export class ClaudeRunner {
 
       const timeoutId = setTimeout(() => {
         if (!resolved) {
-          console.error(`Claude process timed out after ${timeoutMs / 1000} seconds`);
+          logger.error(`Claude process timed out after ${timeoutMs / 1000} seconds`);
           this.kill();
           resolved = true;
           resolve({

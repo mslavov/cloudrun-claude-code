@@ -1,6 +1,7 @@
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
+import { logger } from '../../utils/logger.js';
 
 /**
  * SimpleAnthropicProxy - A minimal HTTP proxy that intercepts requests to api.anthropic.com
@@ -27,8 +28,8 @@ export class SimpleAnthropicProxy {
     return new Promise((resolve, reject) => {
       this.server = http.createServer((clientReq, clientRes) => {
         const requestUrl = clientReq.url || '/';
-        console.log(`[Proxy] ${clientReq.method} ${requestUrl}`);
-        console.log('[Proxy] Incoming headers from Claude:', JSON.stringify(clientReq.headers, null, 2));
+        logger.debug(`[Proxy] ${clientReq.method} ${requestUrl}`);
+        logger.debug('[Proxy] Incoming headers from Claude:', JSON.stringify(clientReq.headers, null, 2));
 
         // When using ANTHROPIC_BASE_URL, Claude SDK sends requests like:
         // GET http://localhost:8765/v1/messages
@@ -40,7 +41,7 @@ export class SimpleAnthropicProxy {
           // Reconstruct the full Anthropic API URL with the requested path
           targetUrl = new URL(requestUrl, 'https://api.anthropic.com');
         } catch (err) {
-          console.error(`[Proxy] Invalid URL: ${requestUrl}`);
+          logger.error(`[Proxy] Invalid URL: ${requestUrl}`);
           clientRes.writeHead(400);
           clientRes.end('Bad Request');
           return;
@@ -58,22 +59,22 @@ export class SimpleAnthropicProxy {
           // Claude sent x-api-key (from ANTHROPIC_API_KEY env var)
           if (this.apiKey) {
             headers['x-api-key'] = this.apiKey;
-            console.log(`[Proxy] Replacing x-api-key with real API key: ${this.apiKey.substring(0, 20)}...`);
+            logger.debug(`[Proxy] Replacing x-api-key with real API key: ${this.apiKey.substring(0, 20)}...`);
           } else {
-            console.error('[Proxy] WARNING: Claude sent x-api-key but we have no API key to inject!');
+            logger.error('[Proxy] WARNING: Claude sent x-api-key but we have no API key to inject!');
           }
           delete headers['authorization']; // Ensure no conflicting auth
         } else if (headers['authorization']) {
           // Claude sent authorization header (from CLAUDE_CODE_OAUTH_TOKEN env var)
           if (this.oauthToken) {
             headers['authorization'] = `Bearer ${this.oauthToken}`;
-            console.log(`[Proxy] Replacing authorization with real OAuth token: ${this.oauthToken.substring(0, 30)}...`);
+            logger.debug(`[Proxy] Replacing authorization with real OAuth token: ${this.oauthToken.substring(0, 30)}...`);
           } else {
-            console.error('[Proxy] WARNING: Claude sent authorization but we have no OAuth token to inject!');
+            logger.error('[Proxy] WARNING: Claude sent authorization but we have no OAuth token to inject!');
           }
           delete headers['x-api-key']; // Ensure no conflicting auth
         } else {
-          console.error('[Proxy] WARNING: Claude sent neither x-api-key nor authorization header!');
+          logger.error('[Proxy] WARNING: Claude sent neither x-api-key nor authorization header!');
         }
 
         // Remove proxy-specific headers
@@ -92,7 +93,7 @@ export class SimpleAnthropicProxy {
         // Forward request to Anthropic API
         const proxyReq = https.request(options, (proxyRes) => {
           // Log response status
-          console.log(`[Proxy] Response: ${proxyRes.statusCode} ${proxyRes.statusMessage}`);
+          logger.debug(`[Proxy] Response: ${proxyRes.statusCode} ${proxyRes.statusMessage}`);
 
           // Forward response headers and status
           clientRes.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
@@ -103,7 +104,7 @@ export class SimpleAnthropicProxy {
 
         // Handle proxy request errors
         proxyReq.on('error', (err) => {
-          console.error('[Proxy] Request error:', err.message);
+          logger.error('[Proxy] Request error:', err.message);
           if (!clientRes.headersSent) {
             clientRes.writeHead(502);
             clientRes.end('Bad Gateway');
@@ -115,7 +116,7 @@ export class SimpleAnthropicProxy {
 
         // Handle client errors
         clientReq.on('error', (err) => {
-          console.error('[Proxy] Client error:', err.message);
+          logger.error('[Proxy] Client error:', err.message);
           proxyReq.destroy();
         });
       });
@@ -126,12 +127,12 @@ export class SimpleAnthropicProxy {
         if (typeof address === 'object' && address) {
           this.port = address.port;
         }
-        console.log(`[Proxy] ✓ Started on 127.0.0.1:${this.port}`);
+        logger.debug(`[Proxy] ✓ Started on 127.0.0.1:${this.port}`);
         resolve();
       });
 
       this.server.on('error', (err) => {
-        console.error('[Proxy] Server error:', err);
+        logger.error('[Proxy] Server error:', err);
         reject(err);
       });
     });
@@ -144,7 +145,7 @@ export class SimpleAnthropicProxy {
 
     return new Promise((resolve) => {
       this.server!.close(() => {
-        console.log('[Proxy] ✓ Stopped');
+        logger.debug('[Proxy] ✓ Stopped');
         resolve();
       });
     });

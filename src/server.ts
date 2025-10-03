@@ -4,6 +4,7 @@ import { execSync } from "child_process";
 import fs from "fs";
 import { HealthController } from "./api/controllers/health.controller.js";
 import { ClaudeController } from "./api/controllers/claude.controller.js";
+import { logger } from "./utils/logger.js";
 
 const app = express();
 app.use(bodyParser.json({ limit: "2mb" }));
@@ -27,8 +28,8 @@ const host = '0.0.0.0'; // Explicitly bind to all interfaces
 // SECURITY: Service no longer uses global tokens
 // Users must provide anthropicApiKey in each request payload
 function validateEnvironment() {
-  console.log("Security mode: User-provided API keys via request payload");
-  console.log("Service-level ANTHROPIC_API_KEY/CLAUDE_CODE_OAUTH_TOKEN are not used");
+  logger.info("Security mode: User-provided API keys via request payload");
+  logger.info("Service-level ANTHROPIC_API_KEY/CLAUDE_CODE_OAUTH_TOKEN are not used");
 }
 
 // Setup global SSH key if mounted (optional - per-repository keys are preferred)
@@ -38,28 +39,28 @@ function fixSshKeyPermissions() {
 
   try {
     if (fs.existsSync(mountedKeyPath)) {
-      console.log(`Found global SSH key mounted at ${mountedKeyPath}`);
+      logger.info(`Found global SSH key mounted at ${mountedKeyPath}`);
 
       // Copy the key to a writable location
       const keyContent = fs.readFileSync(mountedKeyPath, 'utf8');
       fs.writeFileSync(writableKeyPath, keyContent, { mode: 0o600 });
-      console.log(`✓ Global SSH key copied to ${writableKeyPath} with correct permissions`);
+      logger.info(`✓ Global SSH key copied to ${writableKeyPath} with correct permissions`);
 
       // Update Git SSH command to use the writable key
       execSync(`git config --global core.sshCommand "ssh -i ${writableKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"`, { stdio: 'pipe' });
-      console.log("✓ Git configured to use global SSH key");
+      logger.info("✓ Git configured to use global SSH key");
     } else {
-      console.log("ℹ No global SSH key mounted - using per-repository SSH keys");
+      logger.info("ℹ No global SSH key mounted - using per-repository SSH keys");
     }
   } catch (error) {
-    console.error("Warning: Could not setup global SSH key:", error);
+    logger.warn("Warning: Could not setup global SSH key:", error);
   }
 }
 
 validateEnvironment();
 fixSshKeyPermissions();
 
-console.log("Starting server with environment:", {
+logger.info("Starting server with environment:", {
   NODE_ENV: process.env.NODE_ENV,
   PORT: port,
   permissionMode: process.env.PERMISSION_MODE,
@@ -67,8 +68,8 @@ console.log("Starting server with environment:", {
 });
 
 const server = app.listen(port as number, host, () => {
-  console.log(`Server listening on ${host}:${port}`);
-  console.log(`Concurrency: 1 request at a time (Cloud Run + TCP-level protection)`);
+  logger.info(`Server listening on ${host}:${port}`);
+  logger.info(`Concurrency: 1 request at a time (Cloud Run + TCP-level protection)`);
 });
 
 // TCP-level concurrency protection (defense in depth)

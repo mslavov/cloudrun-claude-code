@@ -186,12 +186,12 @@ See `examples/` folder for more request examples.
 **Authentication:**
 - **IMPORTANT**: The service uses a **payload-based authentication model**
 - API keys/OAuth tokens are passed in request payload, **not** as environment variables
-- For local testing, you can optionally set `ANTHROPIC_API_KEY` or `CLAUDE_CODE_OAUTH_TOKEN` environment variables
+- For local testing, you can optionally set `ANTHROPIC_API_KEY` environment variable
 
-**Git Repository Support (Optional):**
-- `GIT_SSH_KEY`: Global SSH private key for cloning private repositories (fallback)
-  - Optional - the service prefers per-request SSH keys via `sshKey` parameter
-  - See Git Repository Setup section for details
+**Git Repository Support:**
+- SSH keys are passed in request payload via the `sshKey` parameter
+- Per-request isolation ensures credentials are never shared between requests
+- See Git Repository Setup section for details
 
 ### Tool Permissions
 
@@ -209,7 +209,7 @@ The service can clone and work with git repositories during request execution. T
 
 The service uses a **payload-based approach** for SSH keys, designed to work seamlessly with orchestration systems:
 
-**Per-Request SSH Keys (Recommended)**: SSH keys are passed directly in the `/run` request payload for maximum security and flexibility:
+**Per-Request SSH Keys**: SSH keys are passed directly in the `/run` request payload for maximum security and flexibility:
 
 ```json
 {
@@ -222,12 +222,12 @@ The service uses a **payload-based approach** for SSH keys, designed to work sea
 ```
 
 **How it works:**
-- SSH keys are written to the ephemeral workspace with secure permissions (0600)
+- SSH keys are written to the ephemeral workspace at `{workspace}/.ssh/deploy_key` with secure permissions (0600)
+- `GIT_SSH_COMMAND` is configured in Claude's environment to use the per-request SSH key
 - HTTPS URLs are automatically converted to SSH format if an SSH key is provided
+- Claude's git commands (clone, pull, push, etc.) automatically use the per-request SSH key
 - All credentials are cleaned up automatically after request completion
 - Each request has isolated credentials, preventing cross-contamination
-
-**Global SSH Key (Fallback)**: For backward compatibility, a global SSH key can be mounted at deployment time via Secret Manager. This is used only when no `sshKey` is provided in the payload.
 
 ### Environment Variables with Repositories
 
@@ -254,60 +254,6 @@ Environment variables are:
 - Written to a `.env` file in the workspace
 - Cleaned up automatically after request completion
 - Isolated per request for security
-
-### Global SSH Key Setup (Optional)
-
-#### Automatic Setup (GitHub)
-
-Use the provided script to automatically generate an SSH key and add it to GitHub:
-
-```bash
-# Generate key and add to GitHub (requires gh CLI)
-./scripts/gen_key.sh
-
-# This script will:
-# 1. Generate an SSH key pair in .keys/ directory
-# 2. Add the public key to your GitHub account
-# 3. Add the private key to your .env file
-# 4. Test the SSH connection
-# 5. Ensure .keys/ is in .gitignore
-
-# Optionally specify a custom key name
-./scripts/gen_key.sh my_custom_key
-
-# Then deploy the secret to Google Cloud
-./scripts/create-secrets.sh
-```
-
-#### Manual Setup
-
-1. **Generate an SSH key pair** (if you don't have one):
-```bash
-# Create keys directory
-mkdir -p .keys
-
-# Generate key pair in .keys directory
-ssh-keygen -t ed25519 -C "claude-code@example.com" -f .keys/claude_ssh_key
-# This creates .keys/claude_ssh_key (private) and .keys/claude_ssh_key.pub (public)
-```
-
-2. **Add the public key to your Git provider**:
-   - **GitHub**: Settings → SSH and GPG keys → New SSH key
-   - **GitLab**: Settings → SSH Keys → Add new key
-   - **Bitbucket**: Personal settings → SSH keys → Add key
-   - Copy the contents of `.keys/claude_ssh_key.pub` and paste it
-
-3. **Set the private key in your `.env` file**:
-```bash
-# Read the private key and add it to .env
-echo "GIT_SSH_KEY=\"$(cat .keys/claude_ssh_key)\"" >> .env
-```
-
-4. **Deploy the secret** (the deployment script handles this automatically):
-```bash
-./scripts/create-secrets.sh
-# This will create/update the GIT_SSH_KEY secret in Google Secret Manager
-```
 
 ### Using Git Repositories in Requests
 
@@ -348,16 +294,17 @@ curl -N -X POST https://your-service-url/run \
 
 ## Security Considerations
 
-1. **Payload-Based Authentication**: API keys passed in request payload, not environment variables
-2. **Token Proxy**: Service uses a proxy to prevent Claude from accessing real API credentials
-3. **User Isolation**: Separate users (serveruser/claudeuser) in Docker for code/runtime isolation
-4. **Ephemeral Workspaces**: Each request gets isolated `/tmp` workspace with automatic cleanup
-5. **Credential Isolation**: SSH keys and environment variables are per-request and isolated
-6. **Network Isolation**: Use Direct VPC egress with firewall rules
-7. **Secrets Management**: Optional use of Secret Manager for global SSH keys
-8. **Tool Restrictions**: Carefully configure allowed tools
-9. **Permission Mode**: Start with `acceptEdits` for safety
-10. **Concurrency Limits**: CONCURRENCY=1 ensures process isolation between requests
+1. **Payload-Based Authentication**: API keys and OAuth tokens passed in request payload, not environment variables
+2. **Payload-Based SSH Keys**: SSH keys passed in request payload for per-request isolation
+3. **Token Proxy**: Service uses a proxy to prevent Claude from accessing real API credentials
+4. **User Isolation**: Separate users (serveruser/claudeuser) in Docker for code/runtime isolation
+5. **Ephemeral Workspaces**: Each request gets isolated `/tmp` workspace with automatic cleanup
+6. **Credential Isolation**: All credentials (API keys, SSH keys, env vars) are per-request and isolated
+7. **Git Command Security**: Claude's git commands use per-request SSH keys via GIT_SSH_COMMAND
+8. **Network Isolation**: Use Direct VPC egress with firewall rules
+9. **Tool Restrictions**: Carefully configure allowed tools
+10. **Permission Mode**: Start with `acceptEdits` for safety
+11. **Concurrency Limits**: CONCURRENCY=1 ensures process isolation between requests
 
 ## Local Development
 
@@ -389,13 +336,12 @@ The Dockerfile installs Claude CLI globally following the official pattern:
 
 All deployment scripts are in the `scripts/` folder:
 
-- `gen_key.sh` - Generate SSH key and automatically add it to GitHub
 - `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM)
 - `setup-service-account.sh` - Set up service account with Secret Manager access
 - `download-service-account-key.sh` - Download service account key for local testing
-- `create-secrets.sh` - Create/update Secret Manager secrets
+- `create-secrets.sh` - Create/update optional Secret Manager secrets (for local testing)
 - `build-and-push.sh` - Build and push Docker image to Artifact Registry
-- `deploy-service.sh` - Deploy service to Cloud Run with service account
+- `deploy-service.sh` - Deploy service to Cloud Run
 - `setup-vpc.sh` - (Optional) Configure VPC network and firewall rules
 - `load-env.sh` - Helper script to load environment variables
 

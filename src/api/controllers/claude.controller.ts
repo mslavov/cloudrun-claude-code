@@ -87,23 +87,27 @@ export class ClaudeController {
       // Create workspace
       workspaceRoot = await this.workspaceService.createWorkspace();
 
+      // Track SSH key path for Claude's git commands
+      let sshKeyPath: string | undefined;
+
+      // Write SSH key if provided (for both git clone and Claude's git commands)
+      if (sshKey) {
+        logger.debug(`✓ SSH key provided in payload (${sshKey.length} bytes)`);
+
+        try {
+          sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
+          logger.debug(`✓ SSH key written to: ${sshKeyPath}`);
+        } catch (error: any) {
+          logger.error(`Failed to write SSH key: ${error.message}`);
+          throw error;
+        }
+      }
+
       // Clone repository if provided
       if (gitRepo) {
-        // Use SSH key from payload (provided by Agent Forge)
-        let sshKeyPath: string | undefined;
         let repoUrlToUse = gitRepo;
 
         if (sshKey) {
-          logger.debug(`✓ SSH key provided in payload (${sshKey.length} bytes)`);
-
-          try {
-            sshKeyPath = await this.workspaceService.writeSshKeyFile(workspaceRoot, sshKey);
-            logger.debug(`✓ SSH key written to: ${sshKeyPath}`);
-          } catch (error: any) {
-            logger.error(`Failed to write SSH key: ${error.message}`);
-            throw error;
-          }
-
           // Convert HTTPS URLs to SSH format if we have an SSH key
           if (gitRepo.startsWith('http://') || gitRepo.startsWith('https://')) {
             repoUrlToUse = this.gitService.convertHttpsToSsh(gitRepo);
@@ -168,6 +172,12 @@ export class ClaudeController {
         claudeEnv.CLAUDE_CODE_OAUTH_TOKEN = 'dummy-oauth-token-proxy-will-replace';
       }
 
+      // Configure Git to use per-request SSH key for Claude's git commands
+      if (sshKeyPath) {
+        claudeEnv.GIT_SSH_COMMAND = `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`;
+        logger.debug(`✓ GIT_SSH_COMMAND configured for Claude: ${sshKeyPath}`);
+      }
+
       // Build options for Claude runner
       const options: ClaudeOptions = {
         allowedTools,
@@ -205,9 +215,9 @@ export class ClaudeController {
       const onData = (line: string) => {
         if (connectionClosed) return;
 
-        // Log Claude output to console if enabled
-        if (process.env.LOG_CLAUDE_OUTPUT === 'true' && line.trim()) {
-          logger.debug('[CLAUDE OUTPUT]', line);
+        // Log Claude output at info level (visible without debug mode)
+        if (line.trim()) {
+          logger.info('[CLAUDE OUTPUT]', line);
         }
 
         try {

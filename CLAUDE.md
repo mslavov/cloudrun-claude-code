@@ -57,16 +57,23 @@ For deployment and service account setup commands, refer to docs/deployment.md a
 - **Two Execution Modes**: Named pipe method (better for large prompts) or direct stdin
 - **Global Claude Installation**: Claude Code installed globally in Docker following official pattern
 - **Dynamic Configuration**: MCP servers, system prompts, tools configured per-request
-- **Authentication**: Supports both API keys and OAuth tokens
+- **Authentication**: Payload-based authentication with token proxy for security
 
 ## Authentication Methods
-- **ANTHROPIC_API_KEY**: Direct API access from console.anthropic.com
-- **CLAUDE_CODE_OAUTH_TOKEN**: OAuth token from Claude subscription using `claude setup-token`
+
+**All authentication is payload-based** - credentials are passed in the request body, not as service-level environment variables:
+
+- `anthropicApiKey`: Direct API key from console.anthropic.com (passed in request payload)
+- `anthropicOAuthToken`: OAuth token from Claude subscription (passed in request payload)
+
+The service uses a local proxy that intercepts Claude's API calls and replaces dummy credentials with real ones from the payload. This ensures Claude never has direct access to your API keys.
 
 ## Configuration Options
 
 ### Request Parameters
 - `prompt` (required): The prompt for Claude
+- `anthropicApiKey`: Anthropic API key (one of anthropicApiKey or anthropicOAuthToken required)
+- `anthropicOAuthToken`: Claude OAuth token (one of anthropicApiKey or anthropicOAuthToken required)
 - `systemPrompt`: Custom system prompt to replace default
 - `appendSystemPrompt`: Text to append to system prompt
 - `allowedTools`: List of allowed tools
@@ -100,7 +107,7 @@ For deployment and service account setup commands, refer to docs/deployment.md a
 ### Claude CLI Environment Setup (claude-runner.ts)
 - Sets `CLAUDE_CODE_ACTION=1` to enable OAuth support
 - Preserves HOME directory for Claude configuration access
-- Passes through CLAUDE_CODE_OAUTH_TOKEN if available
+- Uses token proxy to securely inject credentials (never exposes real tokens to Claude process)
 - Configures timeout (default 55 minutes)
 
 ### Server Security (server.ts)
@@ -119,7 +126,7 @@ For deployment and service account setup commands, refer to docs/deployment.md a
 
 The service uses a **payload-based approach** for SSH keys and environment variables, designed to work seamlessly with orchestration systems like Agent Forge.
 
-### Payload-Based (Recommended)
+### Payload-Based SSH Keys
 SSH keys and environment variables are passed directly in the `/run` request payload:
 
 ```json
@@ -136,8 +143,10 @@ SSH keys and environment variables are passed directly in the `/run` request pay
 ```
 
 **How it works:**
-- SSH keys are written to the ephemeral workspace with secure permissions (0600)
+- SSH keys are written to the ephemeral workspace at `{workspace}/.ssh/deploy_key` with secure permissions (0600)
+- `GIT_SSH_COMMAND` is configured in Claude's environment to use the per-request SSH key
 - HTTPS URLs are automatically converted to SSH format if an SSH key is provided
+- Claude's git commands (clone, pull, push, etc.) automatically use the per-request SSH key
 - Environment variables are injected into Claude's process and written to `.env` file
 - All credentials are cleaned up automatically after request completion
 - Each request has isolated credentials, preventing cross-contamination
@@ -146,23 +155,13 @@ SSH keys and environment variables are passed directly in the `/run` request pay
 - Dynamic per-request credentials from orchestration system
 - No long-term storage of sensitive data in the service
 - Better security isolation between repositories
+- Git commands work seamlessly with per-request SSH keys
 - Flexible credential management controlled by the caller
-
-### Global SSH Key (Fallback, Optional)
-For backward compatibility, a global SSH key can be mounted at `/home/appuser/.ssh/id_rsa` via Secret Manager:
-- Set via `GIT_SSH_KEY` environment variable during deployment
-- Used only when no `sshKey` is provided in the payload
-- Configured during deployment via `scripts/gen_key.sh` and `scripts/create-secrets.sh`
-
-The service automatically detects which approach to use:
-- If `sshKey` is provided in payload, uses that (recommended)
-- Otherwise, falls back to the global SSH key if mounted
-- If neither is available, assumes public repository access
 
 ## Common Issues
 
-### OAuth Token Setup
-OAuth tokens from Claude subscriptions work with this service. The service sets `CLAUDE_CODE_ACTION=1` for proper OAuth support in the containerized environment.
+### Authentication
+All authentication is handled via request payload (`anthropicApiKey` or `anthropicOAuthToken`). The service uses a token proxy to securely inject credentials without exposing them to the Claude CLI process.
 
 ### Process Timeouts
 Claude processes have a configurable timeout (default 55 minutes, max 60 minutes per Cloud Run limits). Long-running tasks may need timeout adjustment via `timeoutMinutes` option.

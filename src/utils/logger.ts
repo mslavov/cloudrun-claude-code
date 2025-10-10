@@ -1,47 +1,85 @@
 /**
- * Debug Logger Utility
+ * Logger Utility with Log Levels
  *
- * Provides conditional logging based on DEBUG environment variable.
- * - debug/info: Only logged when DEBUG=true or NODE_ENV=development
- * - warn/error: Always logged (production-safe)
+ * Provides hierarchical logging based on LOG_LEVEL environment variable.
+ *
+ * Log Levels (hierarchical):
+ * - debug: Shows all logs (debug, info, warn, error)
+ * - info: Shows info, warn, error (NOT debug)
+ *
+ * Default: 'info' in production, 'debug' in development
  */
 
-const isDebugMode = process.env.DEBUG === 'true' || process.env.NODE_ENV === 'development';
+type LogLevel = 'debug' | 'info' | 'warn' | 'error';
+
+const LOG_LEVEL_PRIORITY: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+
+// Determine log level from environment
+const getLogLevel = (): LogLevel => {
+  const envLevel = process.env.LOG_LEVEL?.toLowerCase() as LogLevel;
+
+  // Validate and use LOG_LEVEL if set
+  if (envLevel && LOG_LEVEL_PRIORITY[envLevel] !== undefined) {
+    return envLevel;
+  }
+
+  // Default: debug in development, info in production
+  return process.env.NODE_ENV === 'development' ? 'debug' : 'info';
+};
+
+const currentLogLevel = getLogLevel();
+const currentPriority = LOG_LEVEL_PRIORITY[currentLogLevel];
+
+/**
+ * Check if a log level should be output based on current log level
+ */
+const shouldLog = (level: LogLevel): boolean => {
+  return LOG_LEVEL_PRIORITY[level] >= currentPriority;
+};
 
 export const logger = {
   /**
-   * Debug-level logging (verbose, development only)
-   * Only outputs when DEBUG=true or NODE_ENV=development
+   * Debug-level logging (verbose, detailed diagnostics)
+   * Only outputs when LOG_LEVEL=debug
    */
   debug(...args: any[]): void {
-    if (isDebugMode) {
+    if (shouldLog('debug')) {
       console.log(...args);
     }
   },
 
   /**
-   * Info-level logging (informational, development only)
-   * Only outputs when DEBUG=true or NODE_ENV=development
+   * Info-level logging (informational messages)
+   * Outputs when LOG_LEVEL=info or LOG_LEVEL=debug
    */
   info(...args: any[]): void {
-    if (isDebugMode) {
+    if (shouldLog('info')) {
       console.log(...args);
     }
   },
 
   /**
-   * Warning-level logging (always logged, production-safe)
-   * Used for non-critical issues that should be monitored
+   * Warning-level logging (non-critical issues)
+   * Outputs when LOG_LEVEL=info, LOG_LEVEL=debug, or LOG_LEVEL=warn
    */
   warn(...args: any[]): void {
-    console.warn(...args);
+    if (shouldLog('warn')) {
+      console.warn(...args);
+    }
   },
 
   /**
-   * Error-level logging (always logged, production-safe)
-   * Used for errors and exceptions that need attention
+   * Error-level logging (errors and exceptions)
+   * Always outputs (unless LOG_LEVEL explicitly set higher)
    */
   error(...args: any[]): void {
-    console.error(...args);
+    if (shouldLog('error')) {
+      console.error(...args);
+    }
   }
 };

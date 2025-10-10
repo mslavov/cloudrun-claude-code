@@ -46,8 +46,7 @@ PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
 
 # Advanced configuration
 DANGEROUSLY_SKIP_PERMISSIONS="${DANGEROUSLY_SKIP_PERMISSIONS:-false}"
-LOG_CLAUDE_OUTPUT="${LOG_CLAUDE_OUTPUT:-false}"
-CLAUDE_DEBUG="${CLAUDE_DEBUG:-false}"
+LOG_LEVEL="${LOG_LEVEL:-info}"
 
 # Construct the full image URL
 IMAGE_URL="${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}/${IMAGE_NAME}:${TAG}"
@@ -57,8 +56,7 @@ echo "Image: ${IMAGE_URL}"
 echo "Region: ${REGION}"
 echo "VPC enabled: ${ENABLE_VPC}"
 echo "Skip permissions: ${DANGEROUSLY_SKIP_PERMISSIONS}"
-echo "Log Claude output: ${LOG_CLAUDE_OUTPUT}"
-echo "Claude debug: ${CLAUDE_DEBUG}"
+echo "Log level: ${LOG_LEVEL}"
 
 # Create/update environment variables file with latest values
 ENV_FILE="${DIR}/../.env.deploy.yaml"
@@ -68,8 +66,7 @@ PROJECT_ID: "${PROJECT_ID}"
 ALLOWED_TOOLS: "${ALLOWED_TOOLS}"
 PERMISSION_MODE: "${PERMISSION_MODE}"
 DANGEROUSLY_SKIP_PERMISSIONS: "${DANGEROUSLY_SKIP_PERMISSIONS}"
-LOG_CLAUDE_OUTPUT: "${LOG_CLAUDE_OUTPUT}"
-CLAUDE_DEBUG: "${CLAUDE_DEBUG}"
+LOG_LEVEL: "${LOG_LEVEL}"
 EOF
 echo "✓ Environment variables file created/updated"
 
@@ -86,27 +83,20 @@ DEPLOY_CMD="gcloud run deploy \"${SERVICE_NAME}\" \
   --max-instances=\"${MAX_INSTANCES}\" \
   --env-vars-file=\"${DIR}/../.env.deploy.yaml\""
 
-# Add authentication secrets based on what's available
+# NOTE: Service uses payload-based authentication and SSH keys
+# All credentials are passed in request payload for security isolation:
+# - API keys/OAuth tokens: Pass as anthropicApiKey/anthropicOAuthToken in request body
+# - SSH keys: Pass as sshKey parameter in request body
+# ANTHROPIC_API_KEY secret is optional and only for local testing/debugging
 if gcloud secrets describe ANTHROPIC_API_KEY --project="${PROJECT_ID}" &>/dev/null; then
+  echo "ℹ ANTHROPIC_API_KEY secret found - mounting for local testing only"
+  echo "  Production should use payload-based authentication"
   DEPLOY_CMD="${DEPLOY_CMD} \
   --set-secrets=\"ANTHROPIC_API_KEY=ANTHROPIC_API_KEY:latest\""
-fi
-
-if gcloud secrets describe CLAUDE_CODE_OAUTH_TOKEN --project="${PROJECT_ID}" &>/dev/null; then
-  DEPLOY_CMD="${DEPLOY_CMD} \
-  --set-secrets=\"CLAUDE_CODE_OAUTH_TOKEN=CLAUDE_CODE_OAUTH_TOKEN:latest\""
-fi
-
-# Mount Git SSH key if available (optional - for global Git access)
-if gcloud secrets describe GIT_SSH_KEY --project="${PROJECT_ID}" &>/dev/null; then
-  echo "ℹ GIT_SSH_KEY secret found - mounting as global SSH key"
-  DEPLOY_CMD="${DEPLOY_CMD} \
-  --set-secrets=\"/home/appuser/.ssh/id_rsa=GIT_SSH_KEY:latest\""
 else
-  echo "ℹ No GIT_SSH_KEY secret found - service will use per-repository SSH keys"
+  echo "ℹ No ANTHROPIC_API_KEY secret found"
+  echo "  This is expected - production uses payload-based authentication"
 fi
-
-DEPLOY_CMD="${DEPLOY_CMD}"
 
 # Add VPC configuration if enabled
 if [ "${ENABLE_VPC}" = "true" ]; then

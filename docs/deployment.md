@@ -44,24 +44,9 @@ claude setup-token
 export CLAUDE_CODE_OAUTH_TOKEN=<your-token>
 ```
 
-**Note**: These environment variables are only for local testing convenience. In production, credentials are passed in the request payload for better security isolation.
+**Note**: These environment variables are only for local testing convenience. In production, all credentials (API keys, OAuth tokens, SSH keys) are passed in the request payload for better security isolation.
 
-### 3. Configure SSH Key (Optional)
-
-The service uses a **payload-based approach** for SSH keys. SSH keys are typically passed in the request payload for maximum security and flexibility.
-
-Optionally, you can set up a global SSH key as a fallback:
-```bash
-# Generate and configure an SSH key for GitHub
-./scripts/gen_key.sh
-
-# This adds GIT_SSH_KEY to your .env file
-# The key will be deployed as a secret in step 5
-```
-
-**Recommended approach**: Pass SSH keys in the request payload using the `sshKey` parameter. This provides better security isolation and is ideal for orchestration systems.
-
-### 4. Configure Google Cloud
+### 3. Configure Google Cloud
 
 Edit the `.env` file with your Google Cloud settings:
 
@@ -71,7 +56,7 @@ REGION=us-central1  # or your preferred region
 SERVICE_NAME=claude-code-service
 ```
 
-### 5. Run Setup Script
+### 4. Run Setup Script
 
 The setup script handles all Google Cloud configuration automatically:
 
@@ -84,7 +69,7 @@ The setup script handles all Google Cloud configuration automatically:
 ./scripts/setup-project.sh
 ```
 
-### 6. Deploy the Service
+### 5. Deploy the Service
 
 ```bash
 # Create/update secrets in Secret Manager
@@ -105,7 +90,7 @@ The setup script handles all Google Cloud configuration automatically:
 
 The deployment script will output your service URL. Note: The service now requires authentication.
 
-### 7. Test the Deployment
+### 6. Test the Deployment
 
 #### Using gcloud authentication (for developers)
 ```bash
@@ -129,9 +114,9 @@ python examples/authenticated-client.py
 
 The deployment creates:
 
-1. **Secret Manager Secrets (Optional):**
-   - `GIT_SSH_KEY` - Global SSH key for git repositories (if configured)
-   - **Note**: Anthropic API keys are NOT stored as secrets - they're passed in request payloads
+1. **Secret Manager Secrets (Optional - for local testing only):**
+   - `ANTHROPIC_API_KEY` - Optional, for local testing only
+   - **Note**: Production credentials (API keys, OAuth tokens, SSH keys) are NOT stored as secrets - they're passed in request payloads
 
 2. **Artifact Registry:**
    - Docker repository for your container images
@@ -155,12 +140,14 @@ The deployment creates:
 - **Total capacity:** 10 concurrent requests (10 instances × 1 each)
 
 ### Security
-- **Payload-Based Authentication:** API keys passed in request payload for isolation
+- **Payload-Based Authentication:** API keys and OAuth tokens passed in request payload for isolation
+- **Payload-Based SSH Keys:** SSH keys passed in request payload for per-request isolation
 - **Token Proxy:** Prevents Claude from accessing real API credentials
+- **Git Command Security:** Claude's git commands use per-request SSH keys via GIT_SSH_COMMAND
 - **User Isolation:** Separate users in Docker (serveruser/claudeuser)
 - **Service Account:** Dedicated service account for client applications
 - **Ephemeral workspace:** /tmp cleared per request with automatic cleanup
-- **Credential Isolation:** SSH keys and env vars are per-request
+- **Credential Isolation:** All credentials (API keys, SSH keys, env vars) are per-request
 - **Concurrency=1:** Complete process isolation between requests
 - **No persistent storage:** Stateless service
 
@@ -299,9 +286,9 @@ gcloud run services delete {service-name} --region={region}
 # Delete service account
 gcloud iam service-accounts delete claude-code-client@{project-id}.iam.gserviceaccount.com
 
-# Delete secrets (if any were created)
-gcloud secrets delete GIT_SSH_KEY
-# The service uses payload-based auth, so no API key secrets to delete
+# Delete optional test secrets (if any were created)
+# gcloud secrets delete ANTHROPIC_API_KEY  # Only if you created it for testing
+# Note: Production credentials are passed in request payload, not stored as secrets
 
 # Delete Artifact Registry repository
 gcloud artifacts repositories delete claude-code --location={region}

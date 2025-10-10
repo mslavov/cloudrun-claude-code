@@ -306,8 +306,7 @@ PERMISSION_MODE=acceptEdits
 
 # Advanced Configuration
 DANGEROUSLY_SKIP_PERMISSIONS=false
-LOG_CLAUDE_OUTPUT=true
-CLAUDE_DEBUG=false
+LOG_LEVEL=info
 
 # Authentication tokens are stored in Secret Manager
 # Use ./scripts/create-secrets.sh to upload them

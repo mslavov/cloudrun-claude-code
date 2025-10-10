@@ -22,16 +22,19 @@ else
   echo "✓ Secret Manager API already enabled"
 fi
 
-# Check if required authentication is set
-if [ -z "$ANTHROPIC_API_KEY" ] && [ -z "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-  echo "Error: Either ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN must be set"
-  exit 1
-fi
+# NOTE: Service uses payload-based authentication and SSH keys
+# All credentials are passed in request payload for maximum security isolation
+# - API keys/OAuth tokens: Pass in request body (anthropicApiKey/anthropicOAuthToken)
+# - SSH keys: Pass in request body (sshKey parameter)
+# Service-level secrets are optional and only used for local testing/debugging
 
 echo "Creating/updating secrets in project: ${PROJECT_ID}"
+echo "Note: All production credentials should be passed in request payload"
+echo ""
 
-# Create Anthropic API key secret if set
+# Create Anthropic API key secret if set (optional - for testing/debugging only)
 if [ -n "$ANTHROPIC_API_KEY" ]; then
+  echo "Creating ANTHROPIC_API_KEY secret (for local testing only)..."
   echo -n "${ANTHROPIC_API_KEY}" | gcloud secrets create ANTHROPIC_API_KEY \
     --data-file=- \
     --project="${PROJECT_ID}" \
@@ -39,33 +42,13 @@ if [ -n "$ANTHROPIC_API_KEY" ]; then
   echo -n "${ANTHROPIC_API_KEY}" | gcloud secrets versions add ANTHROPIC_API_KEY \
     --data-file=- \
     --project="${PROJECT_ID}"
-  echo "✓ ANTHROPIC_API_KEY secret created/updated"
-fi
-
-# Create Anthropic OAuth token secret if set
-if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
-  echo -n "${CLAUDE_CODE_OAUTH_TOKEN}" | gcloud secrets create CLAUDE_CODE_OAUTH_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}" \
-    2>/dev/null || \
-  echo -n "${CLAUDE_CODE_OAUTH_TOKEN}" | gcloud secrets versions add CLAUDE_CODE_OAUTH_TOKEN \
-    --data-file=- \
-    --project="${PROJECT_ID}"
-  echo "✓ CLAUDE_CODE_OAUTH_TOKEN secret created/updated"
-fi
-
-# Create Git SSH key secret if set (optional - for global Git access)
-if [ -n "$GIT_SSH_KEY" ]; then
-  echo -n "${GIT_SSH_KEY}" | gcloud secrets create GIT_SSH_KEY \
-    --data-file=- \
-    --project="${PROJECT_ID}" \
-    2>/dev/null || \
-  echo -n "${GIT_SSH_KEY}" | gcloud secrets versions add GIT_SSH_KEY \
-    --data-file=- \
-    --project="${PROJECT_ID}"
-  echo "✓ GIT_SSH_KEY secret created/updated (global SSH key)"
+  echo "✓ ANTHROPIC_API_KEY secret created/updated (for local testing only)"
+  echo "  Production deployments should use request payload instead"
 else
-  echo "ℹ No GIT_SSH_KEY provided - service will use per-repository SSH keys managed via API"
+  echo "ℹ No ANTHROPIC_API_KEY provided"
+  echo "  This is fine - production uses payload-based authentication"
 fi
 
-echo "All secrets have been processed successfully"
+echo ""
+echo "✓ Secrets processed successfully"
+echo "Remember: Production credentials should be passed in request payload, not stored as secrets"

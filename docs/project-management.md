@@ -129,8 +129,7 @@ Each project configuration (`projects/<project-name>.env`) contains:
 - `ALLOWED_TOOLS` - Tools available to Claude
 - `PERMISSION_MODE` - Permission handling mode
 - `DANGEROUSLY_SKIP_PERMISSIONS` - Bypass tool permissions
-- `LOG_CLAUDE_OUTPUT` - Log Claude output to console
-- `CLAUDE_DEBUG` - Enable debug logging
+- `LOG_LEVEL` - Log level (info: shows Claude output, warnings, errors | debug: shows everything including proxy logs)
 
 ### Network Configuration (Optional)
 - `ENABLE_VPC` - Enable VPC connector
@@ -142,10 +141,11 @@ Each project configuration (`projects/<project-name>.env`) contains:
 
 ### Authentication Secrets
 
-Store these in Google Secret Manager using `./scripts/create-secrets.sh`:
-- `ANTHROPIC_API_KEY` - For API access
-- `CLAUDE_CODE_OAUTH_TOKEN` - For Claude subscription users
-- `GIT_SSH_KEY` - For private repository access
+**IMPORTANT**: The service uses **payload-based authentication**. API keys/OAuth tokens are passed in each request's JSON payload, not stored as service-level secrets.
+
+Optional secrets in Google Secret Manager (via `./scripts/create-secrets.sh`):
+- `GIT_SSH_KEY` - Global SSH key for private repository access (fallback when not provided in request payload)
+- `ANTHROPIC_API_KEY` - Optional, for local testing/debugging only (not used in production)
 
 ### Client/Tenant Secrets
 

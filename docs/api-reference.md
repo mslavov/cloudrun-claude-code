@@ -256,6 +256,7 @@ The service signs webhook callbacks with HMAC-SHA256 to ensure authenticity:
 **Status values:**
 - `completed`: Task finished successfully (exitCode 0)
 - `failed`: Task failed (exitCode non-zero)
+- `cancelled`: Task was cancelled via `/cancel/:taskId` endpoint (exitCode 130)
 
 **Security:**
 Always verify the HMAC signature before processing webhook payloads to ensure they originate from your Cloud Run service. Reject requests with:
@@ -279,6 +280,148 @@ gcloud storage cat gs://your-bucket/sessions/TASK_ID/metadata.json
 ```
 
 Log chunks are named with format: `001-20250110-123456.jsonl` (sequential number + timestamp)
+
+
+### POST /cancel/:taskId
+
+Cancel a running async task. This endpoint stops the Claude process and updates the task status to 'cancelled'. A webhook notification is sent to the callback URL with cancellation details.
+
+**Only works for async tasks created via `/run-async`. Sync tasks cannot be cancelled** via this endpoint (they can be cancelled by closing the HTTP connection).
+
+#### Request
+
+**Headers:**
+- `Authorization: Bearer IDENTITY_TOKEN` (required)
+
+**URL Parameters:**
+- `taskId`: The task ID to cancel (from `/run-async` response)
+
+#### Response
+
+**Success (200 OK):**
+```json
+{
+  "message": "Task cancelled successfully",
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "cancelled"
+}
+```
+
+**Task Not Found (404):**
+```json
+{
+  "error": "Task not found",
+  "message": "Task 550e8400-e29b-41d4-a716-446655440000 is not currently running or has already completed",
+  "taskId": "550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+**Invalid Task ID (400):**
+```json
+{
+  "error": "Invalid taskId format. Must be alphanumeric with underscores and hyphens only."
+}
+```
+
+#### Callback Webhook on Cancellation
+
+When a task is cancelled, the service POSTs a webhook to the original `callbackUrl` with status `'cancelled'`:
+
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "cancelled",
+  "exitCode": 130,
+  "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "summary": {
+    "durationMs": 12000,
+    "turns": 3,
+    "errors": 0,
+    "startedAt": "2025-01-10T12:34:56.789Z",
+    "completedAt": "2025-01-10T12:35:08.789Z",
+    "cancelledAt": "2025-01-10T12:35:08.789Z"
+  },
+  "error": "Task cancelled by user",
+  "metadata": {
+    "your": "custom",
+    "metadata": "here"
+  }
+}
+```
+
+Exit code 130 indicates termination by SIGTERM (standard cancellation signal).
+
+#### Example
+
+```bash
+# Start an async task
+curl -X POST https://YOUR-SERVICE-URL.run.app/run-async \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "This will take a long time...",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/claude-complete",
+    "maxTurns": 50
+  }'
+
+# Response: { "taskId": "abc-123", ... }
+
+# Cancel the task
+curl -X POST https://YOUR-SERVICE-URL.run.app/cancel/abc-123 \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+
+# Your webhook will receive the cancellation notification
+```
+
+### GET /tasks/status
+
+Get statistics about active tasks running on the service. Useful for monitoring and debugging.
+
+#### Request
+
+**Headers:**
+- `Authorization: Bearer IDENTITY_TOKEN` (required)
+
+#### Response (200 OK)
+
+```json
+{
+  "active": 1,
+  "max": 1,
+  "tasks": [
+    {
+      "taskId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "async",
+      "startedAt": "2025-01-10T12:34:56.789Z",
+      "cancelling": false
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `active`: Number of currently running tasks
+- `max`: Maximum concurrent tasks allowed (configured via `MAX_CONCURRENT_TASKS` env var, default: 1)
+- `tasks`: Array of active task details
+  - `taskId`: The task identifier
+  - `type`: Either `'sync'` or `'async'`
+  - `startedAt`: ISO timestamp when task started
+  - `cancelling`: Boolean indicating if task is being cancelled
+
+#### Example
+
+```bash
+curl -X GET https://YOUR-SERVICE-URL.run.app/tasks/status \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)"
+```
+
+#### Use Cases
+
+- **Monitoring**: Check if service is busy before submitting a task
+- **Debugging**: Identify long-running or stuck tasks
+- **Load Balancing**: Determine which service instance has capacity
+- **Health Checks**: Verify task execution is functioning
 
 ### GET /health
 

@@ -40,6 +40,13 @@ CONCURRENCY="${CONCURRENCY:-1}"
 MIN_INSTANCES="${MIN_INSTANCES:-0}"
 MAX_INSTANCES="${MAX_INSTANCES:-10}"
 
+# Async task configuration (required for /run-async endpoint)
+# CPU_THROTTLING: Set to 'false' to keep CPU allocated after HTTP response
+# This is REQUIRED for async tasks to continue running in background
+CPU_THROTTLING="${CPU_THROTTLING:-false}"
+GCS_LOGS_BUCKET="${GCS_LOGS_BUCKET:-}"
+GCS_PROJECT_ID="${GCS_PROJECT_ID:-${PROJECT_ID}}"
+
 # Permission configuration
 ALLOWED_TOOLS="${ALLOWED_TOOLS:-Read,Write,Grep,Bash(npm run test:*),WebSearch}"
 PERMISSION_MODE="${PERMISSION_MODE:-acceptEdits}"
@@ -57,6 +64,12 @@ echo "Region: ${REGION}"
 echo "VPC enabled: ${ENABLE_VPC}"
 echo "Skip permissions: ${DANGEROUSLY_SKIP_PERMISSIONS}"
 echo "Log level: ${LOG_LEVEL}"
+echo "CPU throttling: ${CPU_THROTTLING}"
+if [ -n "${GCS_LOGS_BUCKET}" ]; then
+  echo "GCS logs bucket: ${GCS_LOGS_BUCKET} (async tasks enabled)"
+else
+  echo "GCS logs bucket: not configured (async tasks disabled)"
+fi
 
 # Create/update environment variables file with latest values
 ENV_FILE="${DIR}/../.env.deploy.yaml"
@@ -68,7 +81,17 @@ PERMISSION_MODE: "${PERMISSION_MODE}"
 DANGEROUSLY_SKIP_PERMISSIONS: "${DANGEROUSLY_SKIP_PERMISSIONS}"
 LOG_LEVEL: "${LOG_LEVEL}"
 EOF
-echo "✓ Environment variables file created/updated"
+
+# Add GCS configuration if async tasks are enabled
+if [ -n "${GCS_LOGS_BUCKET}" ]; then
+  cat >> "${ENV_FILE}" << EOF
+GCS_LOGS_BUCKET: "${GCS_LOGS_BUCKET}"
+GCS_PROJECT_ID: "${GCS_PROJECT_ID}"
+EOF
+  echo "✓ Environment variables file created/updated (with async task support)"
+else
+  echo "✓ Environment variables file created/updated (async tasks disabled)"
+fi
 
 # Build deployment command
 DEPLOY_CMD="gcloud run deploy \"${SERVICE_NAME}\" \
@@ -82,6 +105,13 @@ DEPLOY_CMD="gcloud run deploy \"${SERVICE_NAME}\" \
   --min-instances=\"${MIN_INSTANCES}\" \
   --max-instances=\"${MAX_INSTANCES}\" \
   --env-vars-file=\"${DIR}/../.env.deploy.yaml\""
+
+# Add CPU throttling flag (critical for async tasks)
+if [ "${CPU_THROTTLING}" = "false" ]; then
+  DEPLOY_CMD="${DEPLOY_CMD} --no-cpu-throttling"
+else
+  DEPLOY_CMD="${DEPLOY_CMD} --cpu-throttling"
+fi
 
 # NOTE: Service uses payload-based authentication and SSH keys
 # All credentials are passed in request payload for security isolation:
@@ -115,25 +145,43 @@ eval ${DEPLOY_CMD}
 if [ $? -eq 0 ]; then
   echo "✓ Service deployed successfully"
   
-  # Grant Secret Manager access to the default compute service account
+  # Grant IAM permissions to the default compute service account
   echo "Granting IAM permissions..."
   PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
   SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
-  
-  # Check if the service account already has the role
+
+  # Check if the service account already has Secret Manager role
   if ! gcloud projects get-iam-policy "${PROJECT_ID}" \
     --flatten="bindings[].members" \
     --filter="bindings.members:serviceAccount:${SERVICE_ACCOUNT} AND bindings.role:roles/secretmanager.secretAccessor" \
     --format="value(bindings.role)" | grep -q "roles/secretmanager.secretAccessor"; then
-    
+
     echo "Granting Secret Manager access to service account: ${SERVICE_ACCOUNT}"
     gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
       --member="serviceAccount:${SERVICE_ACCOUNT}" \
       --role="roles/secretmanager.secretAccessor" \
       --quiet
-    echo "✓ IAM permissions granted"
+    echo "✓ Secret Manager IAM permissions granted"
   else
     echo "✓ Service account already has Secret Manager access"
+  fi
+
+  # Grant Storage Admin role if GCS bucket is configured (for async tasks)
+  if [ -n "${GCS_LOGS_BUCKET}" ]; then
+    if ! gcloud projects get-iam-policy "${PROJECT_ID}" \
+      --flatten="bindings[].members" \
+      --filter="bindings.members:serviceAccount:${SERVICE_ACCOUNT} AND bindings.role:roles/storage.objectAdmin" \
+      --format="value(bindings.role)" | grep -q "roles/storage.objectAdmin"; then
+
+      echo "Granting Storage Object Admin access for async tasks: ${SERVICE_ACCOUNT}"
+      gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+        --member="serviceAccount:${SERVICE_ACCOUNT}" \
+        --role="roles/storage.objectAdmin" \
+        --quiet
+      echo "✓ Storage Object Admin IAM permissions granted"
+    else
+      echo "✓ Service account already has Storage Object Admin access"
+    fi
   fi
 else
   echo "✗ Service deployment failed"

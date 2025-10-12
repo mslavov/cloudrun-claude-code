@@ -56,6 +56,7 @@ APIS=(
   "artifactregistry.googleapis.com"
   "cloudbuild.googleapis.com"
   "compute.googleapis.com"
+  "storage.googleapis.com"
 )
 
 for API in "${APIS[@]}"; do
@@ -120,6 +121,68 @@ else
   echo "✓ Service account already has Secret Manager access"
 fi
 
+# Setup GCS bucket for async tasks (optional)
+echo ""
+echo "Setting up GCS bucket for async tasks..."
+GCS_LOGS_BUCKET="${GCS_LOGS_BUCKET:-}"
+
+if [ -n "$GCS_LOGS_BUCKET" ]; then
+  echo "GCS_LOGS_BUCKET configured: ${GCS_LOGS_BUCKET}"
+
+  # Check if bucket exists
+  if gsutil ls "gs://${GCS_LOGS_BUCKET}" &>/dev/null; then
+    echo "✓ GCS bucket already exists: gs://${GCS_LOGS_BUCKET}"
+  else
+    echo "Creating GCS bucket: ${GCS_LOGS_BUCKET}"
+    gcloud storage buckets create "gs://${GCS_LOGS_BUCKET}" \
+      --project="${PROJECT_ID}" \
+      --location="${REGION}" \
+      --uniform-bucket-level-access \
+      --quiet
+    echo "✓ GCS bucket created"
+
+    # Set lifecycle policy to auto-delete logs after 30 days
+    echo "Setting lifecycle policy (auto-delete after 30 days)..."
+    cat > /tmp/lifecycle-${GCS_LOGS_BUCKET}.json << 'EOF'
+{
+  "lifecycle": {
+    "rule": [{
+      "action": {"type": "Delete"},
+      "condition": {"age": 30}
+    }]
+  }
+}
+EOF
+    gcloud storage buckets update "gs://${GCS_LOGS_BUCKET}" \
+      --lifecycle-file=/tmp/lifecycle-${GCS_LOGS_BUCKET}.json \
+      --quiet
+    rm -f /tmp/lifecycle-${GCS_LOGS_BUCKET}.json
+    echo "✓ Lifecycle policy configured"
+  fi
+
+  # Grant storage permissions to service account
+  echo "Granting storage permissions to service account..."
+  if gcloud storage buckets get-iam-policy "gs://${GCS_LOGS_BUCKET}" \
+      --project="${PROJECT_ID}" \
+      --format=json 2>/dev/null | grep -q "serviceAccount:${SERVICE_ACCOUNT}"; then
+    echo "✓ Service account already has storage permissions"
+  else
+    gcloud storage buckets add-iam-policy-binding "gs://${GCS_LOGS_BUCKET}" \
+      --member="serviceAccount:${SERVICE_ACCOUNT}" \
+      --role="roles/storage.objectAdmin" \
+      --project="${PROJECT_ID}" \
+      --quiet
+    echo "✓ Storage permissions granted"
+  fi
+else
+  echo "⚠ GCS_LOGS_BUCKET not set in .env - skipping bucket creation"
+  echo "  Async task support (/run-async endpoint) will not be available"
+  echo "  To enable later:"
+  echo "    1. Add GCS_LOGS_BUCKET to .env"
+  echo "    2. Run this script again"
+  echo "    3. Redeploy with ./scripts/deploy-service.sh"
+fi
+
 # Check for required files
 echo ""
 echo "Checking required files..."
@@ -151,19 +214,36 @@ echo "========================================="
 echo "Setup Complete!"
 echo "========================================="
 echo ""
+echo "Resources created/verified:"
+echo "✓ Required APIs enabled"
+echo "✓ Artifact Registry repository"
+echo "✓ Docker authentication configured"
+echo "✓ IAM permissions for service account"
+if [ -n "$GCS_LOGS_BUCKET" ]; then
+  echo "✓ GCS bucket for async tasks: gs://${GCS_LOGS_BUCKET}"
+fi
+echo ""
 echo "Next steps:"
 echo "1. (Optional) Configure .env file with:"
-echo "   - GIT_SSH_KEY for global Git access (or use per-request SSH keys)"
 echo "   - ANTHROPIC_API_KEY for local testing only (production uses request payload)"
+if [ -z "$GCS_LOGS_BUCKET" ]; then
+  echo "   - GCS_LOGS_BUCKET for async task support"
+fi
 echo ""
 echo "2. Deploy your service:"
-echo "   ./scripts/create-secrets.sh    # Create secrets"
+echo "   ./scripts/create-secrets.sh    # Create optional secrets (for local testing)"
 echo "   ./scripts/build-and-push.sh    # Build Docker image"
 echo "   ./scripts/deploy-service.sh    # Deploy to Cloud Run"
 echo ""
 echo "3. Test your deployment:"
-echo "   ./scripts/test.sh remote"
+echo "   ./scripts/test.sh remote       # Test sync endpoint"
+if [ -n "$GCS_LOGS_BUCKET" ]; then
+  echo "   ./scripts/test.sh remote-async # Test async endpoint"
+fi
 echo ""
 echo "Project: ${PROJECT_ID}"
 echo "Region: ${REGION}"
 echo "Repository: ${REGION}-docker.pkg.dev/${PROJECT_ID}/${REPOSITORY}"
+if [ -n "$GCS_LOGS_BUCKET" ]; then
+  echo "GCS Logs: gs://${GCS_LOGS_BUCKET}"
+fi

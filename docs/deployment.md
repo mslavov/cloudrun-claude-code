@@ -72,16 +72,13 @@ The setup script handles all Google Cloud configuration automatically:
 ### 5. Deploy the Service
 
 ```bash
-# Create/update secrets in Secret Manager
-./scripts/create-secrets.sh
-
 # Build and push Docker image to Artifact Registry
 ./scripts/build-and-push.sh
 
 # Deploy to Cloud Run (with authentication required)
 ./scripts/deploy-service.sh
 
-# Set up service account for client authentication
+# Set up service account for client authentication (idempotent, safe to re-run)
 ./scripts/setup-service-account.sh
 
 # Download service account key for local testing
@@ -90,12 +87,88 @@ The setup script handles all Google Cloud configuration automatically:
 
 The deployment script will output your service URL. Note: The service now requires authentication.
 
-### 6. Test the Deployment
+### 6. (Optional) Set Up Async Task Support
+
+If you need async task execution with background processing, set up a GCS bucket for logs.
+
+**Option A: Let setup-project.sh handle it (recommended for new projects)**
+
+```bash
+# 1. Add GCS_LOGS_BUCKET to your .env file
+echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
+
+# 2. Run setup script (safe to run on existing projects - it's idempotent)
+./scripts/setup-project.sh
+
+# This will:
+# - Enable storage API
+# - Create GCS bucket
+# - Set lifecycle policy (30-day auto-delete)
+# - Grant storage permissions to service account
+
+# 3. Redeploy with updated environment variable
+./scripts/deploy-service.sh
+```
+
+**Option B: Manual setup**
+
+```bash
+# 1. Add GCS_LOGS_BUCKET to your .env file
+echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
+
+# 2. Create the GCS bucket
+gcloud storage buckets create gs://your-project-id-claude-logs \
+  --project=${PROJECT_ID} \
+  --location=${REGION} \
+  --uniform-bucket-level-access
+
+# 3. Grant storage permissions to service account
+./scripts/setup-service-account.sh
+
+# 4. Redeploy with updated environment variable
+./scripts/deploy-service.sh
+```
+
+**What this enables:**
+- `/run-async` endpoint for background task execution
+- JSONL logs streamed to GCS
+- Webhook callbacks when tasks complete
+- Better handling of long-running tasks (up to Cloud Run's 60-minute limit)
+
+**Storage costs:**
+- GCS storage: ~$0.023/GB/month (standard storage in us-central1)
+- Each task generates ~1-10MB of logs depending on output volume
+- Set lifecycle policies to auto-delete old logs:
+
+```bash
+# Create lifecycle policy to delete logs older than 30 days
+cat > lifecycle.json << 'EOF'
+{
+  "lifecycle": {
+    "rule": [{
+      "action": {"type": "Delete"},
+      "condition": {"age": 30}
+    }]
+  }
+}
+EOF
+
+gcloud storage buckets update gs://your-project-id-claude-logs \
+  --lifecycle-file=lifecycle.json
+```
+
+### 7. Test the Deployment
 
 #### Using gcloud authentication (for developers)
 ```bash
-# Test the deployed service
+# Test the synchronous /run endpoint
 ./scripts/test.sh remote
+
+# Test async task execution (requires GCS_LOGS_BUCKET setup)
+./scripts/test.sh remote-async
+
+# Run all tests
+./scripts/test.sh all
 
 # Or use the authenticated curl example
 ./examples/authenticated-curl.sh
@@ -114,19 +187,23 @@ python examples/authenticated-client.py
 
 The deployment creates:
 
-1. **Secret Manager Secrets (Optional - for local testing only):**
-   - `ANTHROPIC_API_KEY` - Optional, for local testing only
-   - **Note**: Production credentials (API keys, OAuth tokens, SSH keys) are NOT stored as secrets - they're passed in request payloads
-
-2. **Artifact Registry:**
+1. **Artifact Registry:**
    - Docker repository for your container images
    - Located at: `{region}-docker.pkg.dev/{project-id}/claude-code`
 
-3. **Cloud Run Service:**
+2. **Cloud Run Service:**
    - Fully managed serverless container
    - Auto-scaling from 0 to max instances
    - HTTPS endpoint with authentication
    - CONCURRENCY=1 for maximum security isolation
+
+3. **GCS Bucket (Optional - for async tasks):**
+   - Stores JSONL logs from async task execution
+   - Requires `roles/storage.objectAdmin` permission
+   - Located at: `gs://{bucket-name}/sessions/{task-id}/`
+   - Lifecycle policies recommended for cost management
+
+**Note**: All credentials (API keys, OAuth tokens, SSH keys) are passed in request payloads, not stored as service-level secrets.
 
 ## Configuration Details
 
@@ -164,14 +241,6 @@ The deployment creates:
 # Make your changes, then:
 ./scripts/build-and-push.sh
 ./scripts/deploy-service.sh
-```
-
-### Update Secrets
-```bash
-# Edit your local files, then:
-./scripts/create-secrets.sh
-# Restart service to pick up new secrets
-gcloud run services update {service-name} --region={region}
 ```
 
 ### Update Configuration
@@ -286,9 +355,7 @@ gcloud run services delete {service-name} --region={region}
 # Delete service account
 gcloud iam service-accounts delete claude-code-client@{project-id}.iam.gserviceaccount.com
 
-# Delete optional test secrets (if any were created)
-# gcloud secrets delete ANTHROPIC_API_KEY  # Only if you created it for testing
-# Note: Production credentials are passed in request payload, not stored as secrets
+# Note: No secrets are stored in Secret Manager - all credentials are payload-based
 
 # Delete Artifact Registry repository
 gcloud artifacts repositories delete claude-code --location={region}

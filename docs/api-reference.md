@@ -177,6 +177,87 @@ Server-Sent Events (SSE) stream with the following event types:
 - `error`: Error messages
 - `done`: Completion signal
 
+### POST /run-async
+
+Execute a Claude Code prompt asynchronously with background execution. Returns immediately with task ID while execution continues in background. Results are POSTed to callback URL when complete.
+
+**IMPORTANT**: Requires `GCS_LOGS_BUCKET` environment variable to be configured in Cloud Run. Service account must have `roles/storage.objectAdmin` on the GCS bucket.
+
+#### Request
+
+**Headers:**
+- `Content-Type: application/json`
+- `Authorization: Bearer IDENTITY_TOKEN` (required)
+
+**Body Parameters:**
+
+All parameters from `/run` endpoint plus:
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `callbackUrl` | string | Yes | - | Webhook URL to POST results when task completes |
+| `taskId` | string | No | Auto-generated UUID | Custom task ID (must be URL-safe: alphanumeric, underscore, hyphen only) |
+| `metadata` | object | No | - | Custom metadata object returned in callback payload |
+
+All other parameters (prompt, anthropicApiKey, etc.) work the same as `/run` endpoint.
+
+#### Response (202 Accepted)
+
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "createdAt": "2025-01-10T12:34:56.789Z"
+}
+```
+
+#### Callback Webhook Payload
+
+When task completes, the service POSTs the following payload to your `callbackUrl`:
+
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "exitCode": 0,
+  "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "summary": {
+    "durationMs": 45000,
+    "turns": 15,
+    "errors": 0,
+    "startedAt": "2025-01-10T12:34:56.789Z",
+    "completedAt": "2025-01-10T12:35:41.789Z"
+  },
+  "error": "Error message if task failed",
+  "metadata": {
+    "your": "custom",
+    "metadata": "here"
+  }
+}
+```
+
+**Status values:**
+- `completed`: Task finished successfully (exitCode 0)
+- `failed`: Task failed (exitCode non-zero)
+
+#### Logs Retrieval
+
+Task logs are streamed to Google Cloud Storage in JSONL format:
+
+```bash
+# List all log chunks for a task
+gcloud storage ls gs://your-bucket/sessions/TASK_ID/
+
+# Read all logs
+gcloud storage cat gs://your-bucket/sessions/TASK_ID/*.jsonl
+
+# Read metadata
+gcloud storage cat gs://your-bucket/sessions/TASK_ID/metadata.json
+```
+
+Log chunks are named with format: `001-20250110-123456.jsonl` (sequential number + timestamp)
+
 ### GET /health
 
 Health check endpoint.
@@ -214,7 +295,71 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
   -d '{
-    "prompt": "Create a simple Python hello world script"
+    "prompt": "Create a simple Python hello world script",
+    "anthropicApiKey": "sk-ant-your-key-here"
+  }'
+```
+
+### Async Task Execution
+
+```bash
+# Create async task
+curl -X POST https://YOUR-SERVICE-URL.run.app/run-async \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Analyze this large codebase and generate comprehensive documentation",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/claude-complete",
+    "gitRepo": "https://github.com/your-org/large-repo",
+    "gitBranch": "main",
+    "maxTurns": 25,
+    "allowedTools": ["Read", "Write", "Grep", "Bash"],
+    "metadata": {
+      "requestId": "doc-gen-123",
+      "userId": "user-456",
+      "environment": "production"
+    }
+  }'
+
+# Returns immediately:
+# {
+#   "taskId": "550e8400-e29b-41d4-a716-446655440000",
+#   "status": "pending",
+#   "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+#   "createdAt": "2025-01-10T12:34:56.789Z"
+# }
+
+# Later, when task completes, your webhook receives:
+# POST https://your-app.com/webhooks/claude-complete
+# {
+#   "taskId": "550e8400-e29b-41d4-a716-446655440000",
+#   "status": "completed",
+#   "exitCode": 0,
+#   "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+#   "summary": { ... },
+#   "metadata": { ... }
+# }
+```
+
+### Async Task with Custom ID
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run-async \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run comprehensive test suite and generate report",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/test-complete",
+    "taskId": "test-run-prod-2025-01-10",
+    "gitRepo": "git@github.com:your-org/backend.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "environmentSecrets": {
+      "DATABASE_URL": "postgres://prod.example.com/db",
+      "API_KEY": "sk-prod-..."
+    },
+    "maxTurns": 20
   }'
 ```
 

@@ -1,0 +1,810 @@
+# Async Task Execution Guide
+
+This guide covers async task execution with the Claude Code Cloud Run service. Async tasks run in the background and POST results to your webhook when complete.
+
+## Table of Contents
+
+1. [Overview](#overview)
+2. [When to Use Async Tasks](#when-to-use-async-tasks)
+3. [Architecture](#architecture)
+4. [Setup](#setup)
+5. [Creating Async Tasks](#creating-async-tasks)
+6. [Webhook Integration](#webhook-integration)
+7. [Log Retrieval](#log-retrieval)
+8. [Error Handling](#error-handling)
+9. [Best Practices](#best-practices)
+10. [Monitoring](#monitoring)
+
+## Overview
+
+The async task system allows you to run long-running Claude Code tasks in the background without blocking your application. Instead of waiting for a streaming response, your application:
+
+1. **Creates a task** - POST to `/run-async`, receive task ID immediately (202 Accepted)
+2. **Task executes** - Claude Code runs in background, logs streamed to GCS
+3. **Receives callback** - When complete, service POSTs results to your webhook URL
+
+This enables:
+- **Long-running tasks** up to Cloud Run's 60-minute limit
+- **Non-blocking** application flows
+- **Retry-able** tasks with persistent logs
+- **Audit trail** with complete JSONL logs in GCS
+- **Scalability** without blocking HTTP connections
+
+## When to Use Async Tasks
+
+### Use Async Tasks For:
+
+✅ **Long-running analysis** (>30 seconds)
+- Large codebase reviews
+- Comprehensive documentation generation
+- Multi-file refactoring tasks
+
+✅ **Resource-intensive operations**
+- Running extensive test suites
+- Building and deploying applications
+- Data processing pipelines
+
+✅ **Batch operations**
+- Processing multiple repositories
+- Generating reports for multiple projects
+- Automated code quality checks
+
+✅ **Integration workflows**
+- CI/CD pipeline integration
+- Scheduled maintenance tasks
+- Automated incident response
+
+### Use Sync Tasks For:
+
+✅ **Quick responses** (<30 seconds)
+- Code suggestions
+- Simple file operations
+- Quick analysis tasks
+
+✅ **Interactive workflows**
+- Chat-based interactions
+- Real-time code assistance
+- Streaming output requirements
+
+## Architecture
+
+### Components
+
+```
+┌─────────────┐
+│   Client    │
+│ Application │
+└──────┬──────┘
+       │
+       │ POST /run-async
+       │ (prompt, callback URL)
+       │
+       ▼
+┌─────────────────────┐
+│   Cloud Run Service │
+│                     │
+│  ┌──────────────┐  │
+│  │ Task Service │  │
+│  └──────┬───────┘  │
+│         │          │
+│         │ Creates  │
+│         ▼          │
+│  ┌──────────────┐  │
+│  │ GCS Logger   │  │
+│  └──────┬───────┘  │
+│         │          │
+└─────────┼──────────┘
+          │
+          │ Streams logs
+          ▼
+    ┌─────────────┐
+    │  GCS Bucket │
+    │             │
+    │  sessions/  │
+    │  └─{taskId}/│
+    │    ├─*.jsonl│
+    │    └─meta   │
+    └─────────────┘
+          │
+          │ On completion
+          ▼
+    ┌─────────────┐
+    │   Webhook   │
+    │  (callback  │
+    │     URL)    │
+    └─────────────┘
+```
+
+### Flow
+
+1. **Task Creation** (`AsyncClaudeController`)
+   - Validates request (prompt, callback URL, credentials)
+   - Generates or validates task ID
+   - Returns 202 Accepted immediately
+   - Starts background execution
+
+2. **Background Execution** (`TaskService`)
+   - Sets up proxy, workspace, git repo
+   - Executes Claude Code CLI
+   - Streams output to both console and GCS
+
+3. **Log Streaming** (`GCSLoggerService`)
+   - Buffers JSONL output (100 lines per chunk)
+   - Writes chunks to GCS as files
+   - Saves task metadata (status, timestamps, errors)
+
+4. **Callback Notification**
+   - On completion/failure, POSTs to callback URL
+   - Includes task ID, status, logs path, summary
+   - Retries not implemented (client should handle)
+
+## Setup
+
+### Prerequisites
+
+- Google Cloud Project with billing enabled
+- Cloud Run service deployed (see [Deployment Guide](./deployment.md))
+- GCS bucket for log storage
+
+### 1. Create GCS Bucket
+
+**Option A: Using setup-project.sh (Recommended)**
+
+The easiest way is to let the setup script handle everything:
+
+```bash
+# 1. Add to .env
+echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
+
+# 2. Run setup script (safe on existing projects - it's idempotent)
+./scripts/setup-project.sh
+
+# This automatically:
+# - Enables storage API
+# - Creates GCS bucket
+# - Sets 30-day lifecycle policy
+# - Grants storage permissions
+```
+
+**Option B: Manual Creation**
+
+If you prefer manual control:
+
+```bash
+# Set variables from your .env
+PROJECT_ID="your-project-id"
+REGION="us-central1"
+BUCKET_NAME="${PROJECT_ID}-claude-logs"
+
+# Create bucket
+gcloud storage buckets create gs://${BUCKET_NAME} \
+  --project=${PROJECT_ID} \
+  --location=${REGION} \
+  --uniform-bucket-level-access
+
+# Set lifecycle policy to auto-delete old logs
+cat > lifecycle.json << 'EOF'
+{
+  "lifecycle": {
+    "rule": [{
+      "action": {"type": "Delete"},
+      "condition": {"age": 30}
+    }]
+  }
+}
+EOF
+
+gcloud storage buckets update gs://${BUCKET_NAME} \
+  --lifecycle-file=lifecycle.json
+
+rm lifecycle.json
+```
+
+### 2. Configure Environment Variable
+
+Add to your `.env` file:
+
+```bash
+GCS_LOGS_BUCKET=your-project-id-claude-logs
+```
+
+### 3. Grant Storage Permissions
+
+**If you used Option A (setup-project.sh):** Permissions are already granted! Skip to step 4.
+
+**If you used Option B (manual):** Grant permissions manually:
+
+```bash
+# Run the service account setup script (idempotent, safe to re-run)
+./scripts/setup-service-account.sh
+```
+
+This grants `roles/storage.objectAdmin` on the GCS bucket to:
+- Client service account for both Cloud Run invocation and GCS access
+
+### 4. Redeploy Service
+
+```bash
+# Redeploy with updated environment variable
+./scripts/deploy-service.sh
+```
+
+### 5. Test Setup
+
+```bash
+# Test async endpoint
+./scripts/test.sh remote-async
+```
+
+## Creating Async Tasks
+
+### Basic Example
+
+```bash
+AUTH_TOKEN=$(gcloud auth print-identity-token)
+SERVICE_URL="https://your-service-url.run.app"
+
+curl -X POST "${SERVICE_URL}/run-async" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -d '{
+    "prompt": "Analyze this codebase and generate documentation",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/claude-complete",
+    "gitRepo": "https://github.com/your-org/your-repo",
+    "maxTurns": 20
+  }'
+```
+
+**Response (202 Accepted):**
+
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "createdAt": "2025-01-10T12:34:56.789Z"
+}
+```
+
+### With Custom Task ID
+
+```bash
+curl -X POST "${SERVICE_URL}/run-async" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -d '{
+    "prompt": "Run tests and deploy",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/task-complete",
+    "taskId": "deploy-prod-2025-01-10-001",
+    "gitRepo": "git@github.com:your-org/backend.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "maxTurns": 15
+  }'
+```
+
+**Important:** Custom task IDs must be:
+- Unique (service doesn't check for conflicts)
+- URL-safe (alphanumeric, underscore, hyphen only)
+- Meaningful for your use case (e.g., `deploy-{env}-{date}-{seq}`)
+
+### With Metadata
+
+```bash
+curl -X POST "${SERVICE_URL}/run-async" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -d '{
+    "prompt": "Generate API documentation",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/doc-complete",
+    "maxTurns": 10,
+    "metadata": {
+      "requestId": "req-123-456",
+      "userId": "user-789",
+      "projectId": "proj-abc",
+      "environment": "production",
+      "createdBy": "automated-system"
+    }
+  }'
+```
+
+Metadata is:
+- Stored with task logs
+- Returned in callback payload
+- Useful for correlation, tracking, debugging
+
+## Webhook Integration
+
+### Callback Payload Format
+
+Your webhook receives a POST with this payload when the task completes:
+
+```json
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "exitCode": 0,
+  "logsPath": "gs://your-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "summary": {
+    "durationMs": 45000,
+    "turns": 15,
+    "errors": 0,
+    "startedAt": "2025-01-10T12:34:56.789Z",
+    "completedAt": "2025-01-10T12:35:41.789Z"
+  },
+  "error": null,
+  "metadata": {
+    "requestId": "req-123-456",
+    "userId": "user-789"
+  }
+}
+```
+
+**Status values:**
+- `completed`: Task finished successfully (exitCode 0)
+- `failed`: Task failed or errored (exitCode non-zero)
+
+### Implementing a Webhook Handler
+
+#### Node.js / Express
+
+```javascript
+const express = require('express');
+const { Storage } = require('@google-cloud/storage');
+
+const app = express();
+app.use(express.json());
+
+const storage = new Storage();
+
+app.post('/webhooks/claude-complete', async (req, res) => {
+  const { taskId, status, exitCode, logsPath, summary, error, metadata } = req.body;
+
+  console.log(`Task ${taskId} completed with status: ${status}`);
+
+  if (status === 'completed') {
+    // Task succeeded
+    console.log(`Duration: ${summary.durationMs}ms, Turns: ${summary.turns}`);
+
+    // Optionally fetch and process logs
+    const logs = await fetchLogs(logsPath);
+    await processCompletedTask(taskId, logs, metadata);
+
+  } else if (status === 'failed') {
+    // Task failed
+    console.error(`Task failed with exit code ${exitCode}: ${error}`);
+    await handleFailedTask(taskId, error, metadata);
+  }
+
+  // Always respond quickly to avoid timeout
+  res.status(200).json({ received: true });
+});
+
+async function fetchLogs(logsPath) {
+  // Parse GCS path: gs://bucket/sessions/taskId/
+  const match = logsPath.match(/gs:\/\/([^\/]+)\/(.+)/);
+  if (!match) return [];
+
+  const [, bucketName, prefix] = match;
+  const bucket = storage.bucket(bucketName);
+
+  // List all JSONL chunks
+  const [files] = await bucket.getFiles({ prefix });
+  const jsonlFiles = files.filter(f => f.name.endsWith('.jsonl')).sort();
+
+  // Read and parse all chunks
+  const logs = [];
+  for (const file of jsonlFiles) {
+    const [content] = await file.download();
+    const lines = content.toString().split('\n').filter(l => l.trim());
+    logs.push(...lines.map(l => JSON.parse(l)));
+  }
+
+  return logs;
+}
+
+async function processCompletedTask(taskId, logs, metadata) {
+  // Your business logic here
+  console.log(`Processing task ${taskId} with ${logs.length} log entries`);
+
+  // Example: Store results in database
+  // await db.tasks.update(taskId, { status: 'completed', logs });
+
+  // Example: Notify user
+  // await notifyUser(metadata.userId, `Task ${taskId} completed`);
+}
+
+async function handleFailedTask(taskId, error, metadata) {
+  // Your error handling logic
+  console.error(`Handling failed task ${taskId}: ${error}`);
+
+  // Example: Alert on failure
+  // await sendAlert(`Task ${taskId} failed: ${error}`);
+}
+
+app.listen(3000, () => console.log('Webhook server running on port 3000'));
+```
+
+#### Python / Flask
+
+```python
+from flask import Flask, request, jsonify
+from google.cloud import storage
+import json
+
+app = Flask(__name__)
+storage_client = storage.Client()
+
+@app.route('/webhooks/claude-complete', methods=['POST'])
+def claude_complete():
+    data = request.json
+    task_id = data['taskId']
+    status = data['status']
+    exit_code = data['exitCode']
+    logs_path = data['logsPath']
+    summary = data['summary']
+    error = data.get('error')
+    metadata = data.get('metadata', {})
+
+    print(f"Task {task_id} completed with status: {status}")
+
+    if status == 'completed':
+        # Task succeeded
+        print(f"Duration: {summary['durationMs']}ms, Turns: {summary.get('turns')}")
+
+        # Optionally fetch and process logs
+        logs = fetch_logs(logs_path)
+        process_completed_task(task_id, logs, metadata)
+
+    elif status == 'failed':
+        # Task failed
+        print(f"Task failed with exit code {exit_code}: {error}")
+        handle_failed_task(task_id, error, metadata)
+
+    # Always respond quickly
+    return jsonify({'received': True}), 200
+
+def fetch_logs(logs_path):
+    """Fetch JSONL logs from GCS"""
+    # Parse GCS path: gs://bucket/sessions/taskId/
+    parts = logs_path.replace('gs://', '').split('/', 1)
+    bucket_name, prefix = parts[0], parts[1]
+
+    bucket = storage_client.bucket(bucket_name)
+    blobs = list(bucket.list_blobs(prefix=prefix))
+    jsonl_files = sorted([b for b in blobs if b.name.endswith('.jsonl')])
+
+    logs = []
+    for blob in jsonl_files:
+        content = blob.download_as_text()
+        for line in content.strip().split('\n'):
+            if line:
+                logs.append(json.loads(line))
+
+    return logs
+
+def process_completed_task(task_id, logs, metadata):
+    """Process completed task"""
+    print(f"Processing task {task_id} with {len(logs)} log entries")
+    # Your business logic here
+
+def handle_failed_task(task_id, error, metadata):
+    """Handle failed task"""
+    print(f"Handling failed task {task_id}: {error}")
+    # Your error handling logic
+
+if __name__ == '__main__':
+    app.run(port=3000)
+```
+
+### Webhook Security
+
+**Best Practices:**
+
+1. **Use HTTPS** - Always use HTTPS for webhook URLs
+2. **Validate payload** - Check required fields exist
+3. **Verify source** - Check request comes from your Cloud Run service IP
+4. **Add authentication** - Use shared secret in URL or header
+5. **Respond quickly** - Return 200 OK immediately, process async
+6. **Handle retries** - Make webhook idempotent (service doesn't retry currently)
+7. **Log failures** - Log all webhook calls for debugging
+
+**Example with shared secret:**
+
+```javascript
+app.post('/webhooks/claude-complete/:secret', async (req, res) => {
+  const expectedSecret = process.env.WEBHOOK_SECRET;
+  const providedSecret = req.params.secret;
+
+  if (providedSecret !== expectedSecret) {
+    return res.status(401).json({ error: 'Unauthorized' });
+  }
+
+  // Process webhook...
+  res.status(200).json({ received: true });
+});
+```
+
+## Log Retrieval
+
+### Listing Logs
+
+```bash
+# List all log chunks for a task
+gcloud storage ls gs://your-bucket/sessions/TASK_ID/
+
+# Output:
+# gs://your-bucket/sessions/TASK_ID/001-20250110-123456.jsonl
+# gs://your-bucket/sessions/TASK_ID/002-20250110-123457.jsonl
+# gs://your-bucket/sessions/TASK_ID/metadata.json
+```
+
+### Reading Logs
+
+```bash
+# Read all logs (concatenate all chunks)
+gcloud storage cat gs://your-bucket/sessions/TASK_ID/*.jsonl
+
+# Read specific chunk
+gcloud storage cat gs://your-bucket/sessions/TASK_ID/001-20250110-123456.jsonl
+
+# Read metadata
+gcloud storage cat gs://your-bucket/sessions/TASK_ID/metadata.json
+```
+
+### Parsing Logs
+
+Each line in the JSONL file is a JSON object:
+
+```json
+{"type":"session_init","timestamp":"2025-01-10T12:34:56.789Z"}
+{"type":"assistant","text":"I'll help you with that task..."}
+{"type":"tool_use","tool":"Read","args":{"file":"README.md"}}
+{"type":"tool_result","tool":"Read","output":"# Project Title..."}
+{"type":"turn_complete","turnNumber":1}
+{"type":"error","error":"File not found","timestamp":"2025-01-10T12:35:00.123Z"}
+```
+
+### Programmatic Access
+
+```javascript
+const { Storage } = require('@google-cloud/storage');
+const storage = new Storage();
+
+async function getTaskLogs(taskId, bucketName) {
+  const bucket = storage.bucket(bucketName);
+  const prefix = `sessions/${taskId}/`;
+
+  // Get all JSONL files
+  const [files] = await bucket.getFiles({ prefix });
+  const jsonlFiles = files
+    .filter(f => f.name.endsWith('.jsonl'))
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  // Read and parse all logs
+  const logs = [];
+  for (const file of jsonlFiles) {
+    const [content] = await file.download();
+    const lines = content.toString().split('\n');
+
+    for (const line of lines) {
+      if (line.trim()) {
+        try {
+          logs.push(JSON.parse(line));
+        } catch (e) {
+          console.error(`Failed to parse log line: ${line}`);
+        }
+      }
+    }
+  }
+
+  return logs;
+}
+
+// Usage
+const logs = await getTaskLogs('550e8400-e29b-41d4-a716-446655440000', 'your-bucket');
+console.log(`Retrieved ${logs.length} log entries`);
+```
+
+## Error Handling
+
+### Common Errors
+
+#### 1. Missing GCS_LOGS_BUCKET
+
+```json
+{
+  "error": "Async task support not configured (missing GCS_LOGS_BUCKET)"
+}
+```
+
+**Solution:** Configure `GCS_LOGS_BUCKET` environment variable and redeploy.
+
+#### 2. Permission Denied
+
+```
+Error: Permission denied writing to gs://bucket/sessions/...
+```
+
+**Solution:** Run `./scripts/setup-service-account.sh` (idempotent, safe to re-run)
+
+#### 3. Invalid Callback URL
+
+```json
+{
+  "error": "callbackUrl is not a valid URL"
+}
+```
+
+**Solution:** Provide valid HTTP/HTTPS URL.
+
+#### 4. Task Execution Failure
+
+Webhook receives:
+
+```json
+{
+  "status": "failed",
+  "exitCode": 1,
+  "error": "Claude process exited with code 1"
+}
+```
+
+**Actions:**
+- Check logs in GCS for detailed error
+- Verify prompt and configuration
+- Check tool permissions
+- Ensure sufficient timeout
+
+### Timeout Handling
+
+Tasks have configurable timeout (default 55 min, max 60 min):
+
+```json
+{
+  "prompt": "Long task...",
+  "callbackUrl": "...",
+  "timeoutMinutes": 45
+}
+```
+
+If task exceeds timeout:
+- Process is killed
+- Webhook receives `status: "failed"`
+- Logs available in GCS up to timeout point
+
+## Best Practices
+
+### Task Design
+
+1. **Set appropriate timeouts**
+   - Estimate task duration
+   - Add buffer for variability
+   - Don't exceed Cloud Run's 60-minute limit
+
+2. **Use custom task IDs**
+   - Include timestamp, environment, sequence
+   - Makes debugging easier
+   - Enables task correlation
+
+3. **Include metadata**
+   - Request ID for tracing
+   - User ID for attribution
+   - Environment (prod/staging)
+   - Any context needed for callback processing
+
+4. **Choose appropriate max turns**
+   - More turns = more capability but longer runtime
+   - Start conservative, increase as needed
+   - Monitor turn usage in summary
+
+### Webhook Design
+
+1. **Respond immediately**
+   - Return 200 OK quickly (<1 second)
+   - Process async in background
+   - Prevents timeout and retry issues
+
+2. **Make idempotent**
+   - Service doesn't currently retry
+   - But good practice for future-proofing
+   - Use task ID to track processed tasks
+
+3. **Handle all status values**
+   - `completed` - success path
+   - `failed` - error path
+   - Future states possible
+
+4. **Log everything**
+   - All webhook calls
+   - All processing results
+   - All errors
+
+### Cost Optimization
+
+1. **Lifecycle policies**
+   - Delete logs after 30-90 days
+   - Archive to Nearline/Coldline for compliance
+   - Balance retention needs with cost
+
+2. **Monitor storage usage**
+   - Each task generates 1-10MB typically
+   - 1000 tasks/day = ~5GB/day = ~150GB/month
+   - At $0.023/GB/month = ~$3.45/month
+
+3. **Batch operations**
+   - Group related work in single task
+   - Reduces overhead
+   - Better logging
+
+## Monitoring
+
+### Key Metrics
+
+1. **Task creation rate**
+   - Track POST /run-async requests
+   - Alert on unusual spikes
+
+2. **Task duration**
+   - Monitor `durationMs` in callbacks
+   - Track p50, p95, p99 percentiles
+   - Alert on timeouts
+
+3. **Success rate**
+   - Track `completed` vs `failed` status
+   - Alert on increased failure rate
+   - Investigate failed tasks
+
+4. **Storage usage**
+   - Monitor GCS bucket size
+   - Track growth rate
+   - Verify lifecycle policies working
+
+### Logging
+
+Enable structured logging in your webhook handler:
+
+```javascript
+app.post('/webhooks/claude-complete', async (req, res) => {
+  const { taskId, status, summary } = req.body;
+
+  console.log(JSON.stringify({
+    event: 'task_completed',
+    taskId,
+    status,
+    durationMs: summary.durationMs,
+    turns: summary.turns,
+    timestamp: new Date().toISOString()
+  }));
+
+  // Process...
+  res.status(200).json({ received: true });
+});
+```
+
+### Dashboards
+
+Create dashboards to track:
+- Task volume over time
+- Task duration distribution
+- Success/failure rates
+- Storage usage trends
+- Webhook latency
+
+### Alerts
+
+Set up alerts for:
+- Webhook failures (non-200 responses)
+- High task failure rate (>10%)
+- Long task duration (>45 minutes)
+- Storage quota approaching limit
+- Unusual task volume spikes
+
+## Next Steps
+
+- See [API Reference](./api-reference.md) for full endpoint documentation
+- See [Deployment Guide](./deployment.md) for setup instructions
+- See [Testing Guide](./testing.md) for testing async tasks
+- Check examples in `examples/` directory

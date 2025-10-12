@@ -12,9 +12,11 @@ This repository includes comprehensive documentation:
 - **README.md**: Project overview, features, quick start, and API usage examples
 - **docs/deployment.md**: Detailed step-by-step deployment guide with all necessary commands
 - **docs/testing.md**: Complete testing guide with local and remote testing instructions
+- **docs/api-reference.md**: Complete API reference for /run and /run-async endpoints
+- **docs/async-tasks.md**: Comprehensive guide for async task execution with GCS logging
 - **docs/index.md**: Documentation index with links to all guides
 
-When working on deployment or testing tasks, read the appropriate guide first for complete instructions and commands.
+When working on deployment, testing, or async tasks, read the appropriate guide first for complete instructions and commands.
 
 ## Key Commands
 
@@ -29,11 +31,12 @@ npm start         # Run production server from dist/
 **IMPORTANT**: Always use/update the existing test script at `scripts/test.sh` when testing changes.
 
 ```bash
-./scripts/test.sh local    # Test local Docker container
-./scripts/test.sh remote   # Test deployed Cloud Run service
-./scripts/test.sh auth     # Test authentication setup
-./scripts/test.sh examples # Show API request examples
-./scripts/test.sh all      # Run all tests
+./scripts/test.sh local        # Test local Docker container
+./scripts/test.sh remote       # Test deployed Cloud Run service
+./scripts/test.sh remote-async # Test async task execution
+./scripts/test.sh auth         # Test authentication setup
+./scripts/test.sh examples     # Show API request examples
+./scripts/test.sh all          # Run all tests
 ```
 
 For deployment and service account setup commands, refer to docs/deployment.md and docs/testing.md.
@@ -41,23 +44,45 @@ For deployment and service account setup commands, refer to docs/deployment.md a
 ## Architecture
 
 ### Core Components
-- **src/server.ts**: Express server handling /run endpoint, SSE streaming, request validation
+- **src/server.ts**: Express server handling /run and /run-async endpoints, SSE streaming, request validation
+- **src/api/controllers/claude.controller.ts**: Sync endpoint controller (SSE streaming)
+- **src/api/controllers/async-claude.controller.ts**: Async endpoint controller (GCS logging)
+- **src/api/services/task.service.ts**: Unified task execution service for both sync and async
+- **src/api/services/gcs-logger.service.ts**: Streams JSONL logs to Google Cloud Storage
+- **src/api/services/output-handlers.ts**: Output handler pattern (SSE vs GCS)
 - **src/claude-runner.ts**: Manages Claude CLI subprocess spawning with two execution modes (named pipe or direct stdin)
 - **Dockerfile**: Multi-stage build installing Claude Code via official script, runs as non-root user
 
-### Request Flow
+### Request Flow (Sync - /run)
 1. Client sends POST to /run with prompt and configuration
 2. Server creates ephemeral workspace in /tmp
-3. ClaudeRunner spawns claude CLI subprocess with arguments
-4. Output streams back to client via Server-Sent Events (SSE)
-5. Workspace cleaned up after request completion
+3. TaskService executes via ClaudeRunner subprocess
+4. Output streams back to client via Server-Sent Events (SSE) using SSEOutputHandler
+5. Workspace cleaned up after request completion (5s delay)
+
+### Request Flow (Async - /run-async)
+1. Client sends POST to /run-async with prompt, callbackUrl, configuration
+2. Server validates request and returns 202 Accepted with task ID immediately
+3. Task executes in background:
+   - Creates ephemeral workspace in /tmp
+   - TaskService executes via ClaudeRunner subprocess
+   - Output streams to GCS bucket via GCSOutputHandler
+   - Logs written in chunks (100 lines per chunk as JSONL)
+4. On completion:
+   - POSTs results to callback URL with task summary
+   - Saves final metadata to GCS
+   - Workspace cleaned up immediately
+5. Logs persist in GCS at `gs://bucket/sessions/{taskId}/`
 
 ### Key Design Decisions
 - **Ephemeral Workspaces**: Each request gets isolated /tmp/ws-{requestId} directory
 - **Two Execution Modes**: Named pipe method (better for large prompts) or direct stdin
+- **Output Handler Pattern**: SSE for sync, GCS streaming for async (strategy pattern)
+- **Chunked GCS Writes**: Logs buffered and written in 100-line chunks to minimize GCS operations
 - **Global Claude Installation**: Claude Code installed globally in Docker following official pattern
 - **Dynamic Configuration**: MCP servers, system prompts, tools configured per-request
 - **Authentication**: Payload-based authentication with token proxy for security
+- **Async Task Isolation**: Background execution doesn't block HTTP connection, enables long-running tasks
 
 ## Authentication Methods
 
@@ -71,6 +96,8 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 ## Configuration Options
 
 ### Request Parameters
+
+**Common Parameters (both /run and /run-async):**
 - `prompt` (required): The prompt for Claude
 - `anthropicApiKey`: Anthropic API key (one of anthropicApiKey or anthropicOAuthToken required)
 - `anthropicOAuthToken`: Claude OAuth token (one of anthropicApiKey or anthropicOAuthToken required)
@@ -90,12 +117,18 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `environmentSecrets`: Object with environment variables as key-value pairs
 - `sshKey`: SSH private key for git authentication (PEM format)
 - `timeoutMinutes`: Process timeout in minutes (default: 55, max: 60)
-- `metadata`: Optional metadata for logging/tracking
+
+**Async-Only Parameters (/run-async):**
+- `callbackUrl` (required): Webhook URL to POST results when task completes
+- `taskId`: Custom task ID (auto-generated UUID if not provided, must be URL-safe)
+- `metadata`: Optional metadata object returned in callback payload
 
 ### Environment Variables
 - `PORT`: Server port (default: 8080)
 - `ALLOWED_TOOLS`: Default allowed tools list
 - `PERMISSION_MODE`: Default permission mode
+- `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for /run-async)
+- `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
 
 ## Important Implementation Details
 
@@ -158,6 +191,28 @@ SSH keys and environment variables are passed directly in the `/run` request pay
 - Git commands work seamlessly with per-request SSH keys
 - Flexible credential management controlled by the caller
 
+## Async Task Requirements
+
+**For /run-async endpoint to work:**
+
+1. **GCS Bucket Setup:**
+   - Add `GCS_LOGS_BUCKET` to `.env` file
+   - Run `./scripts/setup-project.sh` (safe on existing projects - it's idempotent)
+   - This automatically creates bucket, sets lifecycle policy, grants permissions
+   - Alternative: Manual setup via `gcloud storage buckets create` + `./scripts/setup-service-account.sh` (idempotent)
+   - Example: `your-project-id-claude-logs`
+
+2. **Redeploy Service:**
+   - After setting `GCS_LOGS_BUCKET`, redeploy: `./scripts/deploy-service.sh`
+   - Service validates bucket configuration on startup
+
+3. **Lifecycle Policies (Included):**
+   - `setup-project.sh` automatically sets 30-day auto-delete policy
+   - Reduces storage costs
+   - Logs stored at: `gs://bucket/sessions/{taskId}/`
+
+See `docs/async-tasks.md` for detailed setup and usage guide.
+
 ## Common Issues
 
 ### Authentication
@@ -170,3 +225,14 @@ Claude processes have a configurable timeout (default 55 minutes, max 60 minutes
 The service supports two prompt delivery methods:
 - Named pipe (default): Better for large prompts, uses mkfifo
 - Direct stdin: Simpler but may have issues with very large prompts
+
+### Async Tasks Not Available
+If `/run-async` returns error about missing `GCS_LOGS_BUCKET`:
+1. Add `GCS_LOGS_BUCKET=your-project-id-claude-logs` to .env
+2. Run `./scripts/setup-project.sh` (handles everything automatically)
+3. Redeploy: `./scripts/deploy-service.sh`
+
+Alternative manual approach:
+- Create bucket: `gcloud storage buckets create gs://bucket-name`
+- Grant permissions: `./scripts/setup-service-account.sh` (idempotent, safe to re-run)
+- Redeploy: `./scripts/deploy-service.sh`

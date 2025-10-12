@@ -49,11 +49,12 @@ usage() {
 Usage: $0 [OPTIONS] [COMMAND]
 
 COMMANDS:
-  auth        Test authentication setup
-  local       Test local development server
-  remote      Test deployed Cloud Run service
-  examples    Show example API requests
-  all         Run all tests (default)
+  auth           Test authentication setup
+  local          Test local development server
+  remote         Test deployed Cloud Run service
+  remote-async   Test async task execution on Cloud Run
+  examples       Show example API requests
+  all            Run all tests (default)
 
 OPTIONS:
   -h, --help     Show this help message
@@ -64,6 +65,7 @@ EXAMPLES:
   $0 auth                    # Test authentication
   $0 local                   # Test local server
   $0 remote                  # Test deployed service
+  $0 remote-async            # Test async tasks
   $0 examples                # Show API examples
   $0 all                     # Run all tests
 
@@ -326,6 +328,108 @@ test_remote() {
   fi
 }
 
+# Test remote async endpoint
+test_remote_async() {
+  print_header "Testing Remote Async Task Execution"
+
+  # Get service URL if not provided
+  if [ -z "$SERVICE_URL" ]; then
+    SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+      --region="${REGION}" \
+      --project="${PROJECT_ID}" \
+      --format="value(status.url)" 2>/dev/null) || true
+  fi
+
+  if [ -z "$SERVICE_URL" ]; then
+    print_error "Could not retrieve service URL"
+    print_info "Deploy first with: ./scripts/deploy-service.sh"
+    return 1
+  fi
+
+  print_success "Service URL: ${SERVICE_URL}"
+
+  # Get auth token
+  AUTH_TOKEN=$(gcloud auth print-identity-token 2>/dev/null)
+  if [ -z "$AUTH_TOKEN" ]; then
+    print_error "Could not get authentication token"
+    return 1
+  fi
+
+  # Check if GCS_LOGS_BUCKET is configured
+  if [ -z "${GCS_LOGS_BUCKET}" ]; then
+    print_error "GCS_LOGS_BUCKET not configured in .env"
+    print_info "Async task support requires a GCS bucket"
+    print_info "Add GCS_LOGS_BUCKET to your .env and run ./scripts/update-service-account-permissions.sh"
+    return 1
+  fi
+
+  print_info "GCS Logs Bucket: ${GCS_LOGS_BUCKET}"
+
+  # Determine which auth to use for Anthropic API
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    ANTHROPIC_AUTH="\"anthropicApiKey\": \"${ANTHROPIC_API_KEY}\""
+  elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    ANTHROPIC_AUTH="\"anthropicOAuthToken\": \"${CLAUDE_CODE_OAUTH_TOKEN}\""
+  else
+    print_error "No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN found"
+    print_info "Set one of these environment variables to test API requests"
+    return 1
+  fi
+
+  # Test async endpoint with callback URL (using webhook.site or similar)
+  echo -e "\n1. Testing async task creation:"
+
+  # Use a simple callback URL (httpbin.org/post for testing)
+  CALLBACK_URL="https://httpbin.org/post"
+
+  RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run-async" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${AUTH_TOKEN}" \
+    -d "{
+      \"prompt\": \"Say hello in 3 words and explain why you chose those words\",
+      ${ANTHROPIC_AUTH},
+      \"callbackUrl\": \"${CALLBACK_URL}\",
+      \"maxTurns\": 1,
+      \"allowedTools\": [],
+      \"permissionMode\": \"bypassPermissions\",
+      \"metadata\": {
+        \"test\": \"remote-async\",
+        \"timestamp\": \"$(date -u +%Y-%m-%dT%H:%M:%SZ)\"
+      }
+    }" 2>&1)
+
+  # Parse response
+  if echo "$RESPONSE" | grep -q '"taskId"'; then
+    TASK_ID=$(echo "$RESPONSE" | grep -o '"taskId":"[^"]*"' | cut -d'"' -f4)
+    LOGS_PATH=$(echo "$RESPONSE" | grep -o '"logsPath":"[^"]*"' | cut -d'"' -f4)
+
+    print_success "Async task created successfully"
+    echo "  Task ID: ${TASK_ID}"
+    echo "  Logs Path: ${LOGS_PATH}"
+    echo "  Callback URL: ${CALLBACK_URL}"
+
+    echo -e "\n2. Task execution details:"
+    print_info "Task is executing in background"
+    print_info "When complete, results will be POSTed to callback URL"
+    print_info "Logs are being streamed to: ${LOGS_PATH}"
+
+    echo -e "\n3. To view logs in real-time:"
+    echo "  gcloud storage cat ${LOGS_PATH}*.jsonl"
+
+    echo -e "\n4. To check task status:"
+    echo "  gcloud storage ls ${LOGS_PATH}"
+    echo "  gcloud storage cat ${LOGS_PATH}metadata.json"
+
+  elif echo "$RESPONSE" | grep -q "GCS_LOGS_BUCKET.*not configured"; then
+    print_error "Async tasks not configured on service"
+    print_info "Set GCS_LOGS_BUCKET environment variable in Cloud Run"
+    echo "$RESPONSE"
+  else
+    print_error "Async task creation failed"
+    echo "$RESPONSE"
+  fi
+}
+
 # Show examples
 show_examples() {
   print_header "API Request Examples"
@@ -484,6 +588,9 @@ main() {
     remote)
       test_remote
       ;;
+    remote-async)
+      test_remote_async
+      ;;
     examples)
       show_examples
       ;;
@@ -491,6 +598,7 @@ main() {
       test_auth
       test_local
       test_remote
+      test_remote_async
       echo ""
       print_header "Test Summary"
       print_success "All tests completed"

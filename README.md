@@ -8,11 +8,13 @@ Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service
 
 - ✅ Claude Code CLI integration (official distribution)
 - ✅ API key authentication
+- ✅ Async task execution with GCS logging
 - ✅ Hot-reloadable system prompts via Secret Manager
 - ✅ Secure VPC egress with firewall rules
 - ✅ Per-request ephemeral workspaces
-- ✅ SSE streaming responses
+- ✅ SSE streaming responses (sync) + GCS logs (async)
 - ✅ Tool permission controls
+- ✅ Webhook callbacks for async tasks
 
 ## Quick Start
 
@@ -63,12 +65,11 @@ vim .env
 ./scripts/setup-project.sh
 
 # Deploy your service
-./scripts/create-secrets.sh    # Create/update secrets in Secret Manager
 ./scripts/build-and-push.sh    # Build and push Docker image
 ./scripts/deploy-service.sh    # Deploy to Cloud Run
 
-# Optional: Set up service account for production (after deployment)
-./scripts/setup-service-account.sh    # Configure service account with Secret Manager access
+# Set up service account for production (after deployment)
+./scripts/setup-service-account.sh    # Configure service account (idempotent, safe to re-run)
 ./scripts/download-service-account-key.sh  # Download key for local testing (optional)
 
 # Test the deployment
@@ -148,6 +149,63 @@ curl -N -X POST https://your-service-url/run \
   }'
 ```
 
+### Async Task Execution
+
+For long-running tasks, use the `/run-async` endpoint which returns immediately and executes in the background:
+
+```bash
+# Create async task with callback URL
+curl -X POST https://your-service-url/run-async \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Analyze this large codebase and generate a comprehensive report",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhook/claude-task-complete",
+    "gitRepo": "https://github.com/your-org/your-repo",
+    "maxTurns": 20,
+    "metadata": {
+      "requestId": "task-123",
+      "userId": "user-456"
+    }
+  }'
+
+# Response (202 Accepted - task started):
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "pending",
+  "logsPath": "gs://your-logs-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "createdAt": "2025-01-10T12:34:56.789Z"
+}
+
+# When task completes, POST callback to your webhook:
+{
+  "taskId": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "completed",
+  "exitCode": 0,
+  "logsPath": "gs://your-logs-bucket/sessions/550e8400-e29b-41d4-a716-446655440000/",
+  "summary": {
+    "durationMs": 45000,
+    "turns": 15,
+    "errors": 0,
+    "startedAt": "2025-01-10T12:34:56.789Z",
+    "completedAt": "2025-01-10T12:35:41.789Z"
+  },
+  "metadata": {
+    "requestId": "task-123",
+    "userId": "user-456"
+  }
+}
+
+# View logs from GCS
+gcloud storage cat gs://your-logs-bucket/sessions/TASK_ID/*.jsonl
+```
+
+**Async Task Requirements:**
+- `GCS_LOGS_BUCKET` environment variable must be set in Cloud Run
+- Service account needs `roles/storage.objectAdmin` on the GCS bucket
+- Run `./scripts/update-service-account-permissions.sh` to grant permissions
+
 See `examples/` folder for more request examples.
 
 ## Configuration Options
@@ -175,6 +233,9 @@ See `examples/` folder for more request examples.
 | `sshKey` | string | SSH private key for git authentication (PEM format) | - |
 | `environmentSecrets` | object | Environment variables as key-value pairs | {} |
 | `timeoutMinutes` | number | Process timeout in minutes | 55 |
+| `callbackUrl` | string | Webhook URL for async task completion (required for `/run-async`) | - |
+| `taskId` | string | Custom task ID (auto-generated if not provided, for `/run-async`) | - |
+| `metadata` | object | Custom metadata returned in callback (for `/run-async`) | - |
 
 ### Environment Variables
 
@@ -182,11 +243,18 @@ See `examples/` folder for more request examples.
 - `PORT`: Server port (default: 8080)
 - `ALLOWED_TOOLS`: Comma-separated list of allowed tools
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
+- `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for async tasks)
+- `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
 
 **Authentication:**
 - **IMPORTANT**: The service uses a **payload-based authentication model**
 - API keys/OAuth tokens are passed in request payload, **not** as environment variables
 - For local testing, you can optionally set `ANTHROPIC_API_KEY` environment variable
+
+**Async Tasks:**
+- Requires `GCS_LOGS_BUCKET` to be configured
+- Service account needs `roles/storage.objectAdmin` on the GCS bucket
+- Run `./scripts/setup-service-account.sh` after setting up the bucket (idempotent, safe to re-run)
 
 **Git Repository Support:**
 - SSH keys are passed in request payload via the `sshKey` parameter
@@ -336,14 +404,13 @@ The Dockerfile installs Claude CLI globally following the official pattern:
 
 All deployment scripts are in the `scripts/` folder:
 
-- `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM)
-- `setup-service-account.sh` - Set up service account with Secret Manager access
+- `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM, GCS bucket)
+- `setup-service-account.sh` - Set up service account with permissions (idempotent, safe to re-run)
 - `download-service-account-key.sh` - Download service account key for local testing
-- `create-secrets.sh` - Create/update optional Secret Manager secrets (for local testing)
 - `build-and-push.sh` - Build and push Docker image to Artifact Registry
 - `deploy-service.sh` - Deploy service to Cloud Run
-- `setup-vpc.sh` - (Optional) Configure VPC network and firewall rules
 - `load-env.sh` - Helper script to load environment variables
+- `project.sh` - Manage multiple GCP projects
 
 ## Testing
 
@@ -351,7 +418,9 @@ All deployment scripts are in the `scripts/` folder:
   - `./scripts/test.sh auth` - Test authentication setup
   - `./scripts/test.sh local` - Test local development server
   - `./scripts/test.sh remote` - Test deployed Cloud Run service
+  - `./scripts/test.sh remote-async` - Test async task execution on Cloud Run
   - `./scripts/test.sh examples` - Show API request examples
+  - `./scripts/test.sh all` - Run all tests
 
 ## Troubleshooting
 

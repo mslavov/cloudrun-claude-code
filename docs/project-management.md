@@ -97,14 +97,14 @@ After selecting a project, use the standard deployment scripts:
 # 1. Switch to desired project
 ./scripts/project.sh use production
 
-# 2. Create/update secrets in Secret Manager
-./scripts/create-secrets.sh
-
-# 3. Build and push Docker image
+# 2. Build and push Docker image
 ./scripts/build-and-push.sh
 
-# 4. Deploy the service
+# 3. Deploy the service
 ./scripts/deploy-service.sh
+
+# 4. Set up service account (idempotent, safe to re-run)
+./scripts/setup-service-account.sh
 ```
 
 ## Project Configuration
@@ -137,35 +137,20 @@ Each project configuration (`projects/<project-name>.env`) contains:
 - `VPC_SUBNET` - Subnet name
 - `SUBNET_RANGE` - Subnet IP range
 
-## Secrets Management
+## Authentication
 
-### Authentication Secrets
-
-**IMPORTANT**: The service uses **payload-based authentication**. API keys/OAuth tokens are passed in each request's JSON payload, not stored as service-level secrets.
-
-Optional secrets in Google Secret Manager (via `./scripts/create-secrets.sh`):
-- `GIT_SSH_KEY` - Global SSH key for private repository access (fallback when not provided in request payload)
-- `ANTHROPIC_API_KEY` - Optional, for local testing/debugging only (not used in production)
-
-### Client/Tenant Secrets
-
-Store client-specific secrets in `secrets/` directory:
-- `secrets/bugzy-ai.secrets` - Bugzy AI client secrets
-- `secrets/negbg.secrets` - NEGBG client secrets
-
-These files are gitignored and should contain client-specific tokens (Notion, Slack, etc).
-
-Upload them using:
-```bash
-./scripts/create-tenant-secret.sh <repo> <branch> secrets/<client>.secrets
-```
+**IMPORTANT**: The service uses **payload-based authentication**. All credentials (API keys, OAuth tokens, SSH keys) are passed in each request's JSON payload, not stored as service-level secrets. This ensures:
+- Per-request credential isolation
+- No long-term storage of sensitive data
+- Dynamic credentials from orchestration systems
+- Better security boundaries between requests
 
 ## Important Notes
 
 1. **First Time Setup**: After cloning the repository, you need to:
    - Create at least one project configuration
-   - Upload secrets to Secret Manager
    - Build and deploy
+   - Set up service account for authentication
 
 2. **Switching Projects**: Always use `./scripts/project.sh use <project>` to ensure:
    - `.env` symlink is updated
@@ -174,9 +159,9 @@ Upload them using:
 
 3. **Security**:
    - Never commit secrets to git
-   - Keep authentication tokens in Secret Manager
+   - All credentials are passed in request payloads
    - Project configs can be committed (they don't contain secrets)
-   - Client secrets in `secrets/` are gitignored
+   - Use service account authentication for production deployments
 
 4. **Backwards Compatibility**:
    - If no project is selected, scripts will use existing `.env` if present
@@ -226,13 +211,13 @@ Upload them using:
 
 # 4. Deploy to production
 ./scripts/project.sh use production
-./scripts/create-secrets.sh
 ./scripts/build-and-push.sh
 ./scripts/deploy-service.sh
+./scripts/setup-service-account.sh
 
 # 5. Deploy to staging
 ./scripts/project.sh use staging
-./scripts/create-secrets.sh
 ./scripts/build-and-push.sh
 ./scripts/deploy-service.sh
+./scripts/setup-service-account.sh
 ```

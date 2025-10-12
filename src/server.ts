@@ -2,6 +2,7 @@ import express from "express";
 import bodyParser from "body-parser";
 import { HealthController } from "./api/controllers/health.controller.js";
 import { ClaudeController } from "./api/controllers/claude.controller.js";
+import { AsyncClaudeController } from "./api/controllers/async-claude.controller.js";
 import { logger } from "./utils/logger.js";
 
 const app = express();
@@ -10,14 +11,16 @@ app.use(bodyParser.json({ limit: "2mb" }));
 // Initialize controllers
 const healthController = new HealthController();
 const claudeController = new ClaudeController();
+const asyncClaudeController = new AsyncClaudeController();
 
 // Health routes
 app.get("/", healthController.basicHealth.bind(healthController));
 app.get("/health", healthController.healthCheck.bind(healthController));
 app.get("/healthz", healthController.healthCheck.bind(healthController));
 
-// Claude execution route
+// Claude execution routes
 app.post("/run", claudeController.runClaude.bind(claudeController));
+app.post("/run-async", asyncClaudeController.runAsync.bind(asyncClaudeController));
 
 
 const port = process.env.PORT || 8080;

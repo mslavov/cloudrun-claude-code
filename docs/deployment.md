@@ -89,13 +89,17 @@ The deployment script will output your service URL. Note: The service now requir
 
 ### 6. (Optional) Set Up Async Task Support
 
-If you need async task execution with background processing, set up a GCS bucket for logs.
+If you need async task execution with background processing, set up a GCS bucket for logs and webhook authentication.
 
 **Option A: Let setup-project.sh handle it (recommended for new projects)**
 
 ```bash
-# 1. Add GCS_LOGS_BUCKET to your .env file
+# 1. Add async configuration to your .env file
 echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
+
+# Generate webhook authentication secret
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+echo "CLOUDRUN_CALLBACK_SECRET=$WEBHOOK_SECRET" >> .env
 
 # 2. Run setup script (safe to run on existing projects - it's idempotent)
 ./scripts/setup-project.sh
@@ -106,15 +110,26 @@ echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
 # - Set lifecycle policy (30-day auto-delete)
 # - Grant storage permissions to service account
 
-# 3. Redeploy with updated environment variable
+# 3. Create webhook secret in Secret Manager
+./scripts/create-secrets.sh
+
+# This will:
+# - Enable Secret Manager API if needed
+# - Create CLOUDRUN_CALLBACK_SECRET for webhook authentication
+
+# 4. Redeploy with updated environment variables and secrets
 ./scripts/deploy-service.sh
 ```
 
 **Option B: Manual setup**
 
 ```bash
-# 1. Add GCS_LOGS_BUCKET to your .env file
+# 1. Add async configuration to your .env file
 echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
+
+# Generate webhook authentication secret
+WEBHOOK_SECRET=$(openssl rand -hex 32)
+echo "CLOUDRUN_CALLBACK_SECRET=$WEBHOOK_SECRET" >> .env
 
 # 2. Create the GCS bucket
 gcloud storage buckets create gs://your-project-id-claude-logs \
@@ -122,17 +137,20 @@ gcloud storage buckets create gs://your-project-id-claude-logs \
   --location=${REGION} \
   --uniform-bucket-level-access
 
-# 3. Grant storage permissions to service account
+# 3. Create webhook secret in Secret Manager
+./scripts/create-secrets.sh
+
+# 4. Grant storage permissions to service account
 ./scripts/setup-service-account.sh
 
-# 4. Redeploy with updated environment variable
+# 5. Redeploy with updated environment variables and secrets
 ./scripts/deploy-service.sh
 ```
 
 **What this enables:**
 - `/run-async` endpoint for background task execution
 - JSONL logs streamed to GCS
-- Webhook callbacks when tasks complete
+- HMAC-authenticated webhook callbacks when tasks complete
 - Better handling of long-running tasks (up to Cloud Run's 60-minute limit)
 
 **Storage costs:**
@@ -203,7 +221,12 @@ The deployment creates:
    - Located at: `gs://{bucket-name}/sessions/{task-id}/`
    - Lifecycle policies recommended for cost management
 
-**Note**: All credentials (API keys, OAuth tokens, SSH keys) are passed in request payloads, not stored as service-level secrets.
+4. **Secret Manager (Optional - for async tasks):**
+   - Stores `CLOUDRUN_CALLBACK_SECRET` for webhook HMAC authentication
+   - Mounted to Cloud Run service as environment variable
+   - Used to sign webhook callbacks to your application
+
+**Note**: API keys, OAuth tokens, and SSH keys are passed in request payloads (not stored as secrets), while the webhook callback secret is stored in Secret Manager for service-side signing.
 
 ## Configuration Details
 

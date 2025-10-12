@@ -200,17 +200,33 @@ gcloud storage buckets update gs://${BUCKET_NAME} \
 rm lifecycle.json
 ```
 
-### 2. Configure Environment Variable
+### 2. Configure Environment Variables
 
 Add to your `.env` file:
 
 ```bash
+# GCS bucket for async task logs
 GCS_LOGS_BUCKET=your-project-id-claude-logs
+
+# Webhook authentication secret (generate with: openssl rand -hex 32)
+CLOUDRUN_CALLBACK_SECRET=your-generated-secret-here
 ```
 
-### 3. Grant Storage Permissions
+### 3. Create Webhook Secret
 
-**If you used Option A (setup-project.sh):** Permissions are already granted! Skip to step 4.
+```bash
+# Create secret in Google Cloud Secret Manager
+./scripts/create-secrets.sh
+```
+
+This script will:
+- Enable Secret Manager API if needed
+- Create `CLOUDRUN_CALLBACK_SECRET` from your `.env` file
+- Make it available to Cloud Run during deployment
+
+### 4. Grant Storage Permissions
+
+**If you used Option A (setup-project.sh):** Permissions are already granted! Skip to step 5.
 
 **If you used Option B (manual):** Grant permissions manually:
 
@@ -222,14 +238,14 @@ GCS_LOGS_BUCKET=your-project-id-claude-logs
 This grants `roles/storage.objectAdmin` on the GCS bucket to:
 - Client service account for both Cloud Run invocation and GCS access
 
-### 4. Redeploy Service
+### 5. Redeploy Service
 
 ```bash
-# Redeploy with updated environment variable
+# Redeploy with updated environment variables and secrets
 ./scripts/deploy-service.sh
 ```
 
-### 5. Test Setup
+### 6. Test Setup
 
 ```bash
 # Test async endpoint
@@ -352,6 +368,7 @@ Your webhook receives a POST with this payload when the task completes:
 
 ```javascript
 const express = require('express');
+const crypto = require('crypto');
 const { Storage } = require('@google-cloud/storage');
 
 const app = express();
@@ -359,27 +376,76 @@ app.use(express.json());
 
 const storage = new Storage();
 
-app.post('/webhooks/claude-complete', async (req, res) => {
-  const { taskId, status, exitCode, logsPath, summary, error, metadata } = req.body;
+// Webhook signature verification function
+function verifyWebhookSignature(req) {
+  const signature = req.headers['x-webhook-signature'];
+  const timestamp = req.headers['x-webhook-timestamp'];
+  const secret = process.env.CLOUDRUN_CALLBACK_SECRET;
 
-  console.log(`Task ${taskId} completed with status: ${status}`);
-
-  if (status === 'completed') {
-    // Task succeeded
-    console.log(`Duration: ${summary.durationMs}ms, Turns: ${summary.turns}`);
-
-    // Optionally fetch and process logs
-    const logs = await fetchLogs(logsPath);
-    await processCompletedTask(taskId, logs, metadata);
-
-  } else if (status === 'failed') {
-    // Task failed
-    console.error(`Task failed with exit code ${exitCode}: ${error}`);
-    await handleFailedTask(taskId, error, metadata);
+  if (!signature || !timestamp) {
+    throw new Error('Missing signature or timestamp headers');
   }
 
-  // Always respond quickly to avoid timeout
-  res.status(200).json({ received: true });
+  // Check timestamp is recent (prevent replay attacks)
+  const now = Math.floor(Date.now() / 1000);
+  const timeDiff = Math.abs(now - parseInt(timestamp));
+  if (timeDiff > 300) { // 5 minutes tolerance
+    throw new Error('Timestamp too old');
+  }
+
+  // Verify signature
+  if (!signature.startsWith('sha256=')) {
+    throw new Error('Invalid signature format');
+  }
+
+  const providedSignature = signature.slice(7);
+  const payloadString = JSON.stringify(req.body);
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${payloadString}`)
+    .digest('hex');
+
+  // Constant-time comparison
+  if (!crypto.timingSafeEqual(
+    Buffer.from(providedSignature, 'hex'),
+    Buffer.from(expectedSignature, 'hex')
+  )) {
+    throw new Error('Invalid signature');
+  }
+
+  return true;
+}
+
+app.post('/webhooks/claude-complete', async (req, res) => {
+  try {
+    // Verify webhook signature
+    verifyWebhookSignature(req);
+
+    const { taskId, status, exitCode, logsPath, summary, error, metadata } = req.body;
+
+    console.log(`Task ${taskId} completed with status: ${status}`);
+
+    if (status === 'completed') {
+      // Task succeeded
+      console.log(`Duration: ${summary.durationMs}ms, Turns: ${summary.turns}`);
+
+      // Optionally fetch and process logs
+      const logs = await fetchLogs(logsPath);
+      await processCompletedTask(taskId, logs, metadata);
+
+    } else if (status === 'failed') {
+      // Task failed
+      console.error(`Task failed with exit code ${exitCode}: ${error}`);
+      await handleFailedTask(taskId, error, metadata);
+    }
+
+    // Always respond quickly to avoid timeout
+    res.status(200).json({ received: true });
+
+  } catch (error) {
+    console.error('Webhook error:', error.message);
+    res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 
 async function fetchLogs(logsPath) {
@@ -433,38 +499,86 @@ app.listen(3000, () => console.log('Webhook server running on port 3000'));
 from flask import Flask, request, jsonify
 from google.cloud import storage
 import json
+import hmac
+import hashlib
+import time
+import os
 
 app = Flask(__name__)
 storage_client = storage.Client()
 
+def verify_webhook_signature(request):
+    """Verify HMAC signature from webhook request"""
+    signature = request.headers.get('X-Webhook-Signature')
+    timestamp = request.headers.get('X-Webhook-Timestamp')
+    secret = os.environ['CLOUDRUN_CALLBACK_SECRET']
+
+    if not signature or not timestamp:
+        raise ValueError('Missing signature or timestamp headers')
+
+    # Check timestamp is recent (prevent replay attacks)
+    now = int(time.time())
+    time_diff = abs(now - int(timestamp))
+    if time_diff > 300:  # 5 minutes tolerance
+        raise ValueError('Timestamp too old')
+
+    # Verify signature format
+    if not signature.startswith('sha256='):
+        raise ValueError('Invalid signature format')
+
+    provided_signature = signature[7:]  # Remove 'sha256=' prefix
+
+    # Recompute signature
+    payload_string = json.dumps(request.json, separators=(',', ':'))
+    message = f"{timestamp}.{payload_string}"
+    expected_signature = hmac.new(
+        secret.encode('utf-8'),
+        message.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    # Constant-time comparison
+    if not hmac.compare_digest(provided_signature, expected_signature):
+        raise ValueError('Invalid signature')
+
+    return True
+
 @app.route('/webhooks/claude-complete', methods=['POST'])
 def claude_complete():
-    data = request.json
-    task_id = data['taskId']
-    status = data['status']
-    exit_code = data['exitCode']
-    logs_path = data['logsPath']
-    summary = data['summary']
-    error = data.get('error')
-    metadata = data.get('metadata', {})
+    try:
+        # Verify webhook signature
+        verify_webhook_signature(request)
 
-    print(f"Task {task_id} completed with status: {status}")
+        data = request.json
+        task_id = data['taskId']
+        status = data['status']
+        exit_code = data['exitCode']
+        logs_path = data['logsPath']
+        summary = data['summary']
+        error = data.get('error')
+        metadata = data.get('metadata', {})
 
-    if status == 'completed':
-        # Task succeeded
-        print(f"Duration: {summary['durationMs']}ms, Turns: {summary.get('turns')}")
+        print(f"Task {task_id} completed with status: {status}")
 
-        # Optionally fetch and process logs
-        logs = fetch_logs(logs_path)
-        process_completed_task(task_id, logs, metadata)
+        if status == 'completed':
+            # Task succeeded
+            print(f"Duration: {summary['durationMs']}ms, Turns: {summary.get('turns')}")
 
-    elif status == 'failed':
-        # Task failed
-        print(f"Task failed with exit code {exit_code}: {error}")
-        handle_failed_task(task_id, error, metadata)
+            # Optionally fetch and process logs
+            logs = fetch_logs(logs_path)
+            process_completed_task(task_id, logs, metadata)
 
-    # Always respond quickly
-    return jsonify({'received': True}), 200
+        elif status == 'failed':
+            # Task failed
+            print(f"Task failed with exit code {exit_code}: {error}")
+            handle_failed_task(task_id, error, metadata)
+
+        # Always respond quickly
+        return jsonify({'received': True}), 200
+
+    except Exception as e:
+        print(f"Webhook error: {e}")
+        return jsonify({'error': 'Unauthorized'}), 401
 
 def fetch_logs(logs_path):
     """Fetch JSONL logs from GCS"""
@@ -501,31 +615,184 @@ if __name__ == '__main__':
 
 ### Webhook Security
 
-**Best Practices:**
+The service automatically signs all webhook callbacks with HMAC-SHA256 authentication to ensure authenticity and prevent tampering.
 
-1. **Use HTTPS** - Always use HTTPS for webhook URLs
-2. **Validate payload** - Check required fields exist
-3. **Verify source** - Check request comes from your Cloud Run service IP
-4. **Add authentication** - Use shared secret in URL or header
-5. **Respond quickly** - Return 200 OK immediately, process async
-6. **Handle retries** - Make webhook idempotent (service doesn't retry currently)
-7. **Log failures** - Log all webhook calls for debugging
+**Webhook Headers:**
+- `X-Webhook-Signature`: HMAC-SHA256 signature (format: `sha256={hex}`)
+- `X-Webhook-Timestamp`: Unix timestamp when signature was generated
+- `Content-Type`: application/json
+- `User-Agent`: cloudrun-claude-code/async-task
 
-**Example with shared secret:**
+**How HMAC Authentication Works:**
+
+1. Service generates signature: `HMAC-SHA256(CLOUDRUN_CALLBACK_SECRET, timestamp + "." + payload)`
+2. Signature sent in `X-Webhook-Signature` header as `sha256={hex}`
+3. Timestamp sent in `X-Webhook-Timestamp` header
+4. Your webhook verifies by recomputing the signature and comparing
+
+**Signature Verification (Node.js):**
 
 ```javascript
-app.post('/webhooks/claude-complete/:secret', async (req, res) => {
-  const expectedSecret = process.env.WEBHOOK_SECRET;
-  const providedSecret = req.params.secret;
+const crypto = require('crypto');
+const express = require('express');
 
-  if (providedSecret !== expectedSecret) {
-    return res.status(401).json({ error: 'Unauthorized' });
+const app = express();
+app.use(express.json());
+
+function verifyWebhookSignature(req) {
+  const signature = req.headers['x-webhook-signature'];
+  const timestamp = req.headers['x-webhook-timestamp'];
+  const secret = process.env.CLOUDRUN_CALLBACK_SECRET;
+
+  if (!signature || !timestamp) {
+    throw new Error('Missing signature or timestamp headers');
   }
 
-  // Process webhook...
-  res.status(200).json({ received: true });
+  // Check timestamp is recent (prevent replay attacks)
+  const now = Math.floor(Date.now() / 1000);
+  const timeDiff = Math.abs(now - parseInt(timestamp));
+  if (timeDiff > 300) { // 5 minutes tolerance
+    throw new Error('Timestamp too old or too far in future');
+  }
+
+  // Verify signature format
+  if (!signature.startsWith('sha256=')) {
+    throw new Error('Invalid signature format');
+  }
+
+  const providedSignature = signature.slice(7); // Remove 'sha256=' prefix
+
+  // Recompute signature
+  const payloadString = JSON.stringify(req.body);
+  const expectedSignature = crypto
+    .createHmac('sha256', secret)
+    .update(`${timestamp}.${payloadString}`)
+    .digest('hex');
+
+  // Constant-time comparison to prevent timing attacks
+  if (!crypto.timingSafeEqual(
+    Buffer.from(providedSignature, 'hex'),
+    Buffer.from(expectedSignature, 'hex')
+  )) {
+    throw new Error('Invalid signature');
+  }
+
+  return true;
+}
+
+app.post('/webhooks/claude-complete', async (req, res) => {
+  try {
+    // Verify signature before processing
+    verifyWebhookSignature(req);
+
+    const { taskId, status, exitCode, logsPath, summary, error, metadata } = req.body;
+
+    console.log(`Verified webhook for task ${taskId} with status: ${status}`);
+
+    if (status === 'completed') {
+      // Process successful task
+      await processCompletedTask(taskId, logsPath, metadata);
+    } else if (status === 'failed') {
+      // Handle failed task
+      await handleFailedTask(taskId, error, metadata);
+    }
+
+    // Always respond quickly
+    res.status(200).json({ received: true });
+
+  } catch (error) {
+    console.error('Webhook verification failed:', error.message);
+    res.status(401).json({ error: 'Unauthorized' });
+  }
 });
 ```
+
+**Signature Verification (Python):**
+
+```python
+import hmac
+import hashlib
+import time
+import json
+from flask import Flask, request, jsonify
+
+app = Flask(__name__)
+
+def verify_webhook_signature(request):
+    """Verify HMAC signature from webhook request"""
+    signature = request.headers.get('X-Webhook-Signature')
+    timestamp = request.headers.get('X-Webhook-Timestamp')
+    secret = os.environ['CLOUDRUN_CALLBACK_SECRET']
+
+    if not signature or not timestamp:
+        raise ValueError('Missing signature or timestamp headers')
+
+    # Check timestamp is recent (prevent replay attacks)
+    now = int(time.time())
+    time_diff = abs(now - int(timestamp))
+    if time_diff > 300:  # 5 minutes tolerance
+        raise ValueError('Timestamp too old or too far in future')
+
+    # Verify signature format
+    if not signature.startswith('sha256='):
+        raise ValueError('Invalid signature format')
+
+    provided_signature = signature[7:]  # Remove 'sha256=' prefix
+
+    # Recompute signature
+    payload_string = json.dumps(request.json, separators=(',', ':'))
+    message = f"{timestamp}.{payload_string}"
+    expected_signature = hmac.new(
+        secret.encode('utf-8'),
+        message.encode('utf-8'),
+        hashlib.sha256
+    ).hexdigest()
+
+    # Constant-time comparison
+    if not hmac.compare_digest(provided_signature, expected_signature):
+        raise ValueError('Invalid signature')
+
+    return True
+
+@app.route('/webhooks/claude-complete', methods=['POST'])
+def claude_complete():
+    try:
+        # Verify signature before processing
+        verify_webhook_signature(request)
+
+        data = request.json
+        task_id = data['taskId']
+        status = data['status']
+
+        print(f"Verified webhook for task {task_id} with status: {status}")
+
+        if status == 'completed':
+            # Process successful task
+            process_completed_task(task_id, data['logsPath'], data.get('metadata'))
+        elif status == 'failed':
+            # Handle failed task
+            handle_failed_task(task_id, data.get('error'), data.get('metadata'))
+
+        # Always respond quickly
+        return jsonify({'received': True}), 200
+
+    except Exception as e:
+        print(f"Webhook verification failed: {e}")
+        return jsonify({'error': 'Unauthorized'}), 401
+```
+
+**Best Practices:**
+
+1. **Always verify HMAC signature** - Never process webhooks without verification
+2. **Check timestamp** - Reject requests older than 5 minutes (prevents replay attacks)
+3. **Use constant-time comparison** - Prevents timing attacks when comparing signatures
+4. **Use HTTPS** - Always use HTTPS for webhook URLs
+5. **Validate payload structure** - Check required fields exist
+6. **Respond quickly** - Return 200 OK immediately (<1 second), process async
+7. **Handle retries** - Make webhook idempotent (service doesn't retry currently)
+8. **Log everything** - Log all webhook calls for debugging
+9. **Secure your secret** - Store `CLOUDRUN_CALLBACK_SECRET` securely, never commit to code
+10. **Monitor failures** - Alert on signature verification failures
 
 ## Log Retrieval
 

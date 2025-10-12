@@ -237,9 +237,33 @@ export class GCSOutputHandler implements OutputHandler {
     logger.info(`[TASK ${this.taskId}] Calling webhook: ${this.callbackUrl}`);
 
     try {
+      const secret = process.env.CLOUDRUN_CALLBACK_SECRET;
+
+      if (!secret) {
+        logger.error(`[TASK ${this.taskId}] CLOUDRUN_CALLBACK_SECRET not set - cannot sign webhook`);
+        throw new Error('CLOUDRUN_CALLBACK_SECRET is required for webhook authentication');
+      }
+
+      // Current timestamp (seconds since epoch)
+      const timestamp = Math.floor(Date.now() / 1000).toString();
+
+      // Serialize payload (consistent JSON stringification)
+      const payloadString = JSON.stringify(payload);
+
+      // Create signature: HMAC-SHA256(secret, timestamp + "." + payload)
+      const crypto = await import('crypto');
+      const signature = crypto
+        .createHmac('sha256', secret)
+        .update(`${timestamp}.${payloadString}`)
+        .digest('hex');
+
+      logger.debug(`[TASK ${this.taskId}] Generated webhook signature`);
+
       const response = await axios.post(this.callbackUrl, payload, {
         headers: {
           'Content-Type': 'application/json',
+          'X-Webhook-Signature': `sha256=${signature}`,
+          'X-Webhook-Timestamp': timestamp,
           'User-Agent': 'cloudrun-claude-code/async-task'
         },
         timeout: 30000, // 30 second timeout

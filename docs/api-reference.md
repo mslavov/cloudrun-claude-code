@@ -214,8 +214,24 @@ All other parameters (prompt, anthropicApiKey, etc.) work the same as `/run` end
 
 #### Callback Webhook Payload
 
-When task completes, the service POSTs the following payload to your `callbackUrl`:
+When task completes, the service POSTs the following payload to your `callbackUrl` with HMAC authentication headers.
 
+**Request Headers:**
+```
+POST {callbackUrl}
+Content-Type: application/json
+X-Webhook-Signature: sha256={hmac-sha256-signature}
+X-Webhook-Timestamp: {unix-timestamp}
+User-Agent: cloudrun-claude-code/async-task
+```
+
+**HMAC Authentication:**
+The service signs webhook callbacks with HMAC-SHA256 to ensure authenticity:
+- Signature format: `HMAC-SHA256(CLOUDRUN_CALLBACK_SECRET, timestamp + "." + JSON.stringify(payload))`
+- Your webhook handler should verify this signature before processing
+- See `docs/async-tasks.md` for signature verification examples in Node.js and Python
+
+**Request Body:**
 ```json
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
@@ -240,6 +256,12 @@ When task completes, the service POSTs the following payload to your `callbackUr
 **Status values:**
 - `completed`: Task finished successfully (exitCode 0)
 - `failed`: Task failed (exitCode non-zero)
+
+**Security:**
+Always verify the HMAC signature before processing webhook payloads to ensure they originate from your Cloud Run service. Reject requests with:
+- Missing `X-Webhook-Signature` or `X-Webhook-Timestamp` headers
+- Invalid signatures
+- Timestamps older than 5 minutes (prevents replay attacks)
 
 #### Logs Retrieval
 

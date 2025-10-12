@@ -178,7 +178,12 @@ curl -X POST https://your-service-url/run-async \
   "createdAt": "2025-01-10T12:34:56.789Z"
 }
 
-# When task completes, POST callback to your webhook:
+# When task completes, POST callback to your webhook with HMAC authentication:
+# Headers:
+#   X-Webhook-Signature: sha256=<hmac-signature>
+#   X-Webhook-Timestamp: <unix-timestamp>
+#   Content-Type: application/json
+# Body:
 {
   "taskId": "550e8400-e29b-41d4-a716-446655440000",
   "status": "completed",
@@ -203,8 +208,13 @@ gcloud storage cat gs://your-logs-bucket/sessions/TASK_ID/*.jsonl
 
 **Async Task Requirements:**
 - `GCS_LOGS_BUCKET` environment variable must be set in Cloud Run
+- `CLOUDRUN_CALLBACK_SECRET` must be set for webhook HMAC authentication
 - Service account needs `roles/storage.objectAdmin` on the GCS bucket
-- Run `./scripts/update-service-account-permissions.sh` to grant permissions
+- Run `./scripts/create-secrets.sh` to create the webhook secret
+- Run `./scripts/setup-service-account.sh` to grant storage permissions
+
+**Webhook Security:**
+The service signs webhook callbacks with HMAC-SHA256. Your webhook handler should verify the signature to ensure authenticity. See `docs/async-tasks.md` for signature verification examples.
 
 See `examples/` folder for more request examples.
 
@@ -245,6 +255,7 @@ See `examples/` folder for more request examples.
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
 - `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for async tasks)
 - `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
+- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for async tasks)
 
 **Authentication:**
 - **IMPORTANT**: The service uses a **payload-based authentication model**
@@ -253,7 +264,9 @@ See `examples/` folder for more request examples.
 
 **Async Tasks:**
 - Requires `GCS_LOGS_BUCKET` to be configured
+- Requires `CLOUDRUN_CALLBACK_SECRET` for webhook authentication (generate with `openssl rand -hex 32`)
 - Service account needs `roles/storage.objectAdmin` on the GCS bucket
+- Run `./scripts/create-secrets.sh` to create webhook secret in Secret Manager
 - Run `./scripts/setup-service-account.sh` after setting up the bucket (idempotent, safe to re-run)
 
 **Git Repository Support:**

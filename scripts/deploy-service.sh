@@ -128,6 +128,25 @@ else
   echo "  This is expected - production uses payload-based authentication"
 fi
 
+# Mount CLOUDRUN_CALLBACK_SECRET for webhook HMAC authentication (required for async tasks)
+if [ -n "${GCS_LOGS_BUCKET}" ]; then
+  if gcloud secrets describe CLOUDRUN_CALLBACK_SECRET --project="${PROJECT_ID}" &>/dev/null; then
+    echo "✓ CLOUDRUN_CALLBACK_SECRET found - mounting for webhook authentication"
+    if echo "$DEPLOY_CMD" | grep -q "set-secrets="; then
+      # Append to existing secrets
+      DEPLOY_CMD="${DEPLOY_CMD%\"}\",CLOUDRUN_CALLBACK_SECRET=CLOUDRUN_CALLBACK_SECRET:latest\""
+    else
+      # First secret
+      DEPLOY_CMD="${DEPLOY_CMD} \
+  --set-secrets=\"CLOUDRUN_CALLBACK_SECRET=CLOUDRUN_CALLBACK_SECRET:latest\""
+    fi
+  else
+    echo "⚠ WARNING: CLOUDRUN_CALLBACK_SECRET not found in Secret Manager"
+    echo "  Async tasks require this secret for webhook authentication"
+    echo "  Run: ./scripts/create-secrets.sh to create it"
+  fi
+fi
+
 # Add VPC configuration if enabled
 if [ "${ENABLE_VPC}" = "true" ]; then
   DEPLOY_CMD="${DEPLOY_CMD} \
@@ -150,38 +169,22 @@ if [ $? -eq 0 ]; then
   PROJECT_NUMBER=$(gcloud projects describe "${PROJECT_ID}" --format="value(projectNumber)")
   SERVICE_ACCOUNT="${PROJECT_NUMBER}-compute@developer.gserviceaccount.com"
 
-  # Check if the service account already has Secret Manager role
-  if ! gcloud projects get-iam-policy "${PROJECT_ID}" \
-    --flatten="bindings[].members" \
-    --filter="bindings.members:serviceAccount:${SERVICE_ACCOUNT} AND bindings.role:roles/secretmanager.secretAccessor" \
-    --format="value(bindings.role)" | grep -q "roles/secretmanager.secretAccessor"; then
-
-    echo "Granting Secret Manager access to service account: ${SERVICE_ACCOUNT}"
-    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-      --member="serviceAccount:${SERVICE_ACCOUNT}" \
-      --role="roles/secretmanager.secretAccessor" \
-      --quiet
-    echo "✓ Secret Manager IAM permissions granted"
-  else
-    echo "✓ Service account already has Secret Manager access"
-  fi
+  # Grant Secret Manager access (idempotent - safe to run multiple times)
+  echo "Granting Secret Manager access to service account: ${SERVICE_ACCOUNT}"
+  gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+    --member="serviceAccount:${SERVICE_ACCOUNT}" \
+    --role="roles/secretmanager.secretAccessor" \
+    --quiet 2>/dev/null || true
+  echo "✓ Secret Manager IAM permissions granted"
 
   # Grant Storage Admin role if GCS bucket is configured (for async tasks)
   if [ -n "${GCS_LOGS_BUCKET}" ]; then
-    if ! gcloud projects get-iam-policy "${PROJECT_ID}" \
-      --flatten="bindings[].members" \
-      --filter="bindings.members:serviceAccount:${SERVICE_ACCOUNT} AND bindings.role:roles/storage.objectAdmin" \
-      --format="value(bindings.role)" | grep -q "roles/storage.objectAdmin"; then
-
-      echo "Granting Storage Object Admin access for async tasks: ${SERVICE_ACCOUNT}"
-      gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
-        --member="serviceAccount:${SERVICE_ACCOUNT}" \
-        --role="roles/storage.objectAdmin" \
-        --quiet
-      echo "✓ Storage Object Admin IAM permissions granted"
-    else
-      echo "✓ Service account already has Storage Object Admin access"
-    fi
+    echo "Granting Storage Object Admin access for async tasks: ${SERVICE_ACCOUNT}"
+    gcloud projects add-iam-policy-binding "${PROJECT_ID}" \
+      --member="serviceAccount:${SERVICE_ACCOUNT}" \
+      --role="roles/storage.objectAdmin" \
+      --quiet 2>/dev/null || true
+    echo "✓ Storage Object Admin IAM permissions granted"
   fi
 else
   echo "✗ Service deployment failed"

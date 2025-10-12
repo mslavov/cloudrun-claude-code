@@ -129,6 +129,7 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `PERMISSION_MODE`: Default permission mode
 - `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for /run-async)
 - `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
+- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for /run-async)
 
 ## Important Implementation Details
 
@@ -202,16 +203,28 @@ SSH keys and environment variables are passed directly in the `/run` request pay
    - Alternative: Manual setup via `gcloud storage buckets create` + `./scripts/setup-service-account.sh` (idempotent)
    - Example: `your-project-id-claude-logs`
 
-2. **Redeploy Service:**
-   - After setting `GCS_LOGS_BUCKET`, redeploy: `./scripts/deploy-service.sh`
-   - Service validates bucket configuration on startup
+2. **Webhook Security Setup:**
+   - Generate a strong secret: `openssl rand -hex 32`
+   - Add `CLOUDRUN_CALLBACK_SECRET` to `.env` file with the generated secret
+   - Run `./scripts/create-secrets.sh` to create the secret in Google Cloud Secret Manager
+   - This secret is used for HMAC-SHA256 webhook authentication
 
-3. **Lifecycle Policies (Included):**
+3. **Redeploy Service:**
+   - After setting `GCS_LOGS_BUCKET` and `CLOUDRUN_CALLBACK_SECRET`, redeploy: `./scripts/deploy-service.sh`
+   - Service validates bucket configuration and mounts webhook secret on startup
+
+4. **Lifecycle Policies (Included):**
    - `setup-project.sh` automatically sets 30-day auto-delete policy
    - Reduces storage costs
    - Logs stored at: `gs://bucket/sessions/{taskId}/`
 
-See `docs/async-tasks.md` for detailed setup and usage guide.
+**Webhook Security:**
+When task completes, the service POSTs to your callback URL with HMAC authentication headers:
+- `X-Webhook-Signature`: HMAC-SHA256 signature (format: `sha256={hex}`)
+- `X-Webhook-Timestamp`: Unix timestamp when signature was generated
+- Your webhook handler should verify the signature to ensure authenticity
+
+See `docs/async-tasks.md` for detailed setup, usage guide, and webhook signature verification examples.
 
 ## Common Issues
 

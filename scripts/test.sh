@@ -52,6 +52,7 @@ COMMANDS:
   auth           Test authentication setup
   local          Test local development server
   remote         Test deployed Cloud Run service
+  playwright     Test Playwright MCP on Cloud Run
   remote-async   Test async task execution on Cloud Run
   examples       Show example API requests
   all            Run all tests (default)
@@ -65,6 +66,7 @@ EXAMPLES:
   $0 auth                    # Test authentication
   $0 local                   # Test local server
   $0 remote                  # Test deployed service
+  $0 playwright              # Test Playwright MCP
   $0 remote-async            # Test async tasks
   $0 examples                # Show API examples
   $0 all                     # Run all tests
@@ -328,6 +330,86 @@ test_remote() {
   fi
 }
 
+# Test Playwright MCP
+test_playwright() {
+  print_header "Testing Playwright MCP on Cloud Run"
+
+  # Get service URL if not provided
+  if [ -z "$SERVICE_URL" ]; then
+    SERVICE_URL=$(gcloud run services describe "${SERVICE_NAME}" \
+      --region="${REGION}" \
+      --project="${PROJECT_ID}" \
+      --format="value(status.url)" 2>/dev/null) || true
+  fi
+
+  if [ -z "$SERVICE_URL" ]; then
+    print_error "Could not retrieve service URL"
+    print_info "Deploy first with: ./scripts/deploy-service.sh"
+    return 1
+  fi
+
+  print_success "Service URL: ${SERVICE_URL}"
+
+  # Get auth token
+  AUTH_TOKEN=$(gcloud auth print-identity-token 2>/dev/null)
+  if [ -z "$AUTH_TOKEN" ]; then
+    print_error "Could not get authentication token"
+    return 1
+  fi
+
+  # Determine which auth to use for Anthropic API
+  if [ -n "$ANTHROPIC_API_KEY" ]; then
+    ANTHROPIC_AUTH="\"anthropicApiKey\": \"${ANTHROPIC_API_KEY}\""
+  elif [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+    ANTHROPIC_AUTH="\"anthropicOAuthToken\": \"${CLAUDE_CODE_OAUTH_TOKEN}\""
+  else
+    print_error "No ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN found"
+    print_info "Set one of these environment variables to test API requests"
+    return 1
+  fi
+
+  # Test Playwright MCP with simple navigation
+  echo -e "\n1. Testing Playwright MCP - Simple Navigation:"
+  print_info "This test will use Playwright to navigate to example.com and get the page title"
+
+  RESPONSE=$(curl -s -X POST "${SERVICE_URL}/run" \
+    -H "Content-Type: application/json" \
+    -H "Authorization: Bearer ${AUTH_TOKEN}" \
+    --max-time 180 \
+    -d "{
+      \"prompt\": \"Using the Playwright MCP, navigate to https://example.com in headless mode with --no-sandbox, get the page title, and tell me what it is.\",
+      ${ANTHROPIC_AUTH},
+      \"mcpConfigJson\": {
+        \"mcpServers\": {
+          \"playwright\": {
+            \"command\": \"npx\",
+            \"args\": [
+              \"-y\",
+              \"@playwright/mcp@latest\",
+              \"--headless\",
+              \"--no-sandbox\"
+            ]
+          }
+        }
+      },
+      \"maxTurns\": 5,
+      \"allowedTools\": [\"mcp__playwright__*\"],
+      \"permissionMode\": \"bypassPermissions\"
+    }" 2>&1)
+
+  # Check for successful response
+  if echo "$RESPONSE" | grep -q '"type":"assistant"' && echo "$RESPONSE" | grep -qi "example"; then
+    print_success "Playwright MCP test successful"
+    echo "$RESPONSE" | grep -o '"text":"[^"]*Example[^"]*"' | head -1 | sed 's/"text"://; s/"//g'
+  elif echo "$RESPONSE" | grep -qi "error"; then
+    print_error "Playwright MCP test failed with error"
+    echo "$RESPONSE" | grep -i "error" | head -5
+  else
+    print_error "Playwright MCP test completed but result unclear"
+    echo "$RESPONSE" | head -20
+  fi
+}
+
 # Test remote async endpoint
 test_remote_async() {
   print_header "Testing Remote Async Task Execution"
@@ -587,6 +669,9 @@ main() {
       ;;
     remote)
       test_remote
+      ;;
+    playwright)
+      test_playwright
       ;;
     remote-async)
       test_remote_async

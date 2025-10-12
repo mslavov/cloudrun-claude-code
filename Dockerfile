@@ -1,5 +1,5 @@
 # ---- build stage ----
-FROM node:20-bookworm-slim AS build
+FROM node:20-bookworm AS build
 WORKDIR /app
 COPY package*.json ./
 RUN npm ci
@@ -8,20 +8,48 @@ COPY src ./src
 RUN npm run build
 
 # ---- runtime stage ----
-FROM node:20-bookworm-slim
+FROM node:20-bookworm
 WORKDIR /app
 
-# Install system dependencies needed for Claude Code SDK
+# Install system dependencies needed for Claude Code SDK and Playwright/Chromium
 # Enable backports to get OpenSSH 10.0 (supports Ed25519 PKCS#8 format keys)
 RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/sources.list.d/backports.list && \
     apt-get update && apt-get install -y --no-install-recommends \
     bash git ripgrep ca-certificates curl \
     openssh-client/bookworm-backports \
+    # Chromium system dependencies for Playwright
+    libasound2 \
+    libatk-bridge2.0-0 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libcairo2 \
+    libcups2 \
+    libdbus-1-3 \
+    libdrm2 \
+    libgbm1 \
+    libglib2.0-0 \
+    libnspr4 \
+    libnss3 \
+    libpango-1.0-0 \
+    libwayland-client0 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
   && rm -rf /var/lib/apt/lists/*
 
 # Install Claude Code globally via npm (always gets latest version)
 # This approach matches the GitHub Action implementation and simplifies version management
 RUN npm install -g @anthropic-ai/claude-code
+
+# Install Playwright and MCP server globally
+# This prevents re-downloading packages at runtime for faster MCP startup
+RUN npm install -g @playwright/test @playwright/mcp && \
+    npx playwright install chrome --with-deps
 
 # Set up environment
 ENV NODE_ENV=production

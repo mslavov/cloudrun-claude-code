@@ -95,7 +95,9 @@ export class TaskLogger extends Writable {
   private buffer: string[] = [];
   private chunkIndex = 0;
   private readonly CHUNK_SIZE = 100; // Lines per chunk
+  private readonly FLUSH_INTERVAL_MS = 2000; // Flush every 2 seconds
   private writePromises: Promise<void>[] = [];
+  private flushTimer?: NodeJS.Timeout;
 
   constructor(bucket: Bucket, taskId: string) {
     super({ objectMode: true });
@@ -113,12 +115,18 @@ export class TaskLogger extends Writable {
       // Add line to buffer
       this.buffer.push(line);
 
-      // If buffer reaches chunk size, flush it
+      // If buffer reaches chunk size, flush it immediately
       if (this.buffer.length >= this.CHUNK_SIZE) {
+        this.clearFlushTimer();
         this.flushBuffer()
-          .then(() => callback())
+          .then(() => {
+            this.startFlushTimer();
+            callback();
+          })
           .catch(error => callback(error));
       } else {
+        // Start/restart timer to flush after interval
+        this.startFlushTimer();
         callback();
       }
     } catch (error: any) {
@@ -131,6 +139,9 @@ export class TaskLogger extends Writable {
    * Final flush when stream is closed
    */
   _final(callback: (error?: Error | null) => void): void {
+    // Clear timer first
+    this.clearFlushTimer();
+
     // Flush any remaining buffered lines
     this.flushBuffer()
       .then(() => {
@@ -145,6 +156,34 @@ export class TaskLogger extends Writable {
         logger.error(`Error finalizing task logger:`, error);
         callback(error);
       });
+  }
+
+  /**
+   * Start or restart the flush timer
+   */
+  private startFlushTimer(): void {
+    // Clear existing timer
+    this.clearFlushTimer();
+
+    // Only start timer if there's data in the buffer
+    if (this.buffer.length > 0) {
+      this.flushTimer = setTimeout(() => {
+        logger.debug(`Time-based flush triggered for task ${this.taskId} (${this.buffer.length} lines)`);
+        this.flushBuffer().catch(error => {
+          logger.error(`Error in time-based flush for task ${this.taskId}:`, error);
+        });
+      }, this.FLUSH_INTERVAL_MS);
+    }
+  }
+
+  /**
+   * Clear the flush timer
+   */
+  private clearFlushTimer(): void {
+    if (this.flushTimer) {
+      clearTimeout(this.flushTimer);
+      this.flushTimer = undefined;
+    }
   }
 
   /**

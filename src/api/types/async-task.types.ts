@@ -38,7 +38,7 @@ export interface AsyncRunResponse {
 /**
  * Status of an async task
  */
-export type AsyncTaskStatus = 'pending' | 'running' | 'completed' | 'failed';
+export type AsyncTaskStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * Result posted to callback URL when task completes
@@ -48,7 +48,7 @@ export interface AsyncTaskResult {
   taskId: string;
 
   /** Final status */
-  status: 'completed' | 'failed';
+  status: 'completed' | 'failed' | 'cancelled';
 
   /** Exit code from Claude process */
   exitCode: number;
@@ -72,6 +72,9 @@ export interface AsyncTaskResult {
 
     /** Completion timestamp */
     completedAt: string;
+
+    /** Cancellation timestamp (if cancelled) */
+    cancelledAt?: string;
   };
 
   /** Error message if task failed */
@@ -91,6 +94,8 @@ export interface AsyncTaskMetadata {
   createdAt: string;
   startedAt?: string;
   completedAt?: string;
+  cancelledAt?: string;
+  cancelledBy?: string;
   error?: string;
   metadata?: Record<string, any>;
 }

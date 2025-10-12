@@ -1,10 +1,12 @@
 import path from "path";
+import crypto from "crypto";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "./git.service.js";
 import { WorkspaceService } from "./workspace.service.js";
 import { SimpleAnthropicProxy } from "./simple-proxy.js";
 import { OutputHandler } from "./output-handlers.js";
 import { RunRequest } from "../types/request.types.js";
+import { TaskRegistry } from "./task-registry.service.js";
 import { logger } from "../../utils/logger.js";
 
 /**
@@ -15,10 +17,12 @@ import { logger } from "../../utils/logger.js";
 export class TaskService {
   private gitService: GitService;
   private workspaceService: WorkspaceService;
+  private registry: TaskRegistry;
 
   constructor() {
     this.gitService = new GitService();
     this.workspaceService = new WorkspaceService();
+    this.registry = TaskRegistry.getInstance();
   }
 
   /**
@@ -31,13 +35,19 @@ export class TaskService {
     taskId?: string
   ): Promise<void> {
     const startTime = Date.now();
-    const logPrefix = taskId ? `[TASK ${taskId}]` : '';
 
-    logger.info(`${logPrefix} Starting task execution`);
+    // Generate task ID for sync requests (async requests already have one)
+    const effectiveTaskId = taskId || `sync-${crypto.randomUUID()}`;
+    const taskType = taskId ? 'async' : 'sync';
+    const logPrefix = `[TASK ${effectiveTaskId}]`;
+
+    logger.info(`${logPrefix} Starting task execution (type: ${taskType})`);
 
     let workspaceRoot: string | undefined;
     let proxy: SimpleAnthropicProxy | undefined;
+    let runner: ClaudeRunner | undefined;
     let cleanedUp = false;
+    let registered = false;
 
     try {
       // Setup proxy
@@ -75,8 +85,26 @@ export class TaskService {
       // Build Claude options
       const options = this.buildClaudeOptions(request, claudeEnv);
 
+      // Create Claude runner
+      runner = new ClaudeRunner(workspaceRoot);
+
+      // Register task in registry BEFORE starting execution
+      try {
+        this.registry.register(effectiveTaskId, runner, taskType);
+        registered = true;
+        logger.debug(`${logPrefix} Task registered in registry`);
+      } catch (error: any) {
+        logger.error(`${logPrefix} Failed to register task:`, error.message);
+        throw new Error(`Cannot start task: ${error.message}`);
+      }
+
       // Create data and error handlers
       const onData = (line: string) => {
+        // Check for cancellation before processing output
+        if (this.registry.isCancelling(effectiveTaskId)) {
+          logger.debug(`${logPrefix} Skipping output (task is cancelling)`);
+          return;
+        }
         outputHandler.onData(line);
       };
 
@@ -84,10 +112,9 @@ export class TaskService {
         outputHandler.onError(error);
       };
 
-      // Run Claude
-      const runner = new ClaudeRunner(workspaceRoot);
       logger.info(`${logPrefix} Starting Claude CLI`);
 
+      // Run Claude (this will block until completion or cancellation)
       const result = request.useNamedPipe !== false
         ? await runner.runWithPipe(request.prompt, options, onData, onError)
         : await runner.runDirect(request.prompt, options, onData, onError);
@@ -95,25 +122,38 @@ export class TaskService {
       // Calculate duration
       const durationMs = Date.now() - startTime;
 
-      // Notify completion
-      await outputHandler.onComplete(result, durationMs);
-
-      logger.info(`${logPrefix} Task completed successfully in ${durationMs}ms`);
+      // Check if task was cancelled
+      if (this.registry.isCancelling(effectiveTaskId)) {
+        logger.info(`${logPrefix} Task was cancelled during execution`);
+        await outputHandler.onCancel(durationMs);
+      } else {
+        // Normal completion
+        await outputHandler.onComplete(result, durationMs);
+        logger.info(`${logPrefix} Task completed successfully in ${durationMs}ms`);
+      }
 
     } catch (error: any) {
       logger.error(`${logPrefix} Task failed:`, error.message, error.stack);
 
-      // Notify error
-      outputHandler.onError(error.message);
+      // Check if this was a cancellation
+      const wasCancelled = registered && this.registry.isCancelling(effectiveTaskId);
 
-      // Try to complete with error status
-      try {
-        await outputHandler.onComplete(
-          { exitCode: 1, output: '', error: error.message },
-          Date.now() - startTime
-        );
-      } catch (completeError: any) {
-        logger.error(`${logPrefix} Failed to notify completion:`, completeError.message);
+      if (wasCancelled) {
+        logger.info(`${logPrefix} Task failed due to cancellation`);
+        // Cancellation was already handled above, just log
+      } else {
+        // Normal error handling
+        outputHandler.onError(error.message);
+
+        // Try to complete with error status
+        try {
+          await outputHandler.onComplete(
+            { exitCode: 1, output: '', error: error.message },
+            Date.now() - startTime
+          );
+        } catch (completeError: any) {
+          logger.error(`${logPrefix} Failed to notify completion:`, completeError.message);
+        }
       }
 
       // Clean up workspace immediately on error
@@ -126,6 +166,11 @@ export class TaskService {
       throw error;
 
     } finally {
+      // Unregister task from registry
+      if (registered) {
+        this.registry.unregister(effectiveTaskId);
+        logger.debug(`${logPrefix} Task unregistered from registry`);
+      }
       // Cleanup output handler
       try {
         await outputHandler.cleanup();
@@ -141,7 +186,7 @@ export class TaskService {
 
       // Clean up workspace (delayed for sync, immediate for async)
       if (workspaceRoot && !cleanedUp) {
-        if (taskId) {
+        if (taskType === 'async') {
           // Async task: immediate cleanup
           await this.workspaceService.cleanupWorkspaceNow(workspaceRoot);
           logger.debug(`${logPrefix} Workspace cleaned up`);

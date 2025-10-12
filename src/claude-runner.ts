@@ -359,17 +359,39 @@ export class ClaudeRunner {
     });
   }
 
+  /**
+   * Kill the Claude process (used for cancellation)
+   * Sends SIGTERM first, then SIGKILL after 5 seconds if still alive
+   */
   kill(): void {
     if (this.process) {
-      this.process.kill("SIGTERM");
+      logger.info('Killing Claude process (SIGTERM)');
+      try {
+        this.process.kill("SIGTERM");
+      } catch (e: any) {
+        logger.error('Error sending SIGTERM:', e.message);
+      }
+
       // Force kill after 5 seconds if it doesn't terminate
       setTimeout(() => {
         try {
-          this.process?.kill("SIGKILL");
-        } catch (e) {
-          // Process may already be dead
+          if (this.process && !this.process.killed) {
+            logger.warn('Claude process did not terminate, sending SIGKILL');
+            this.process.kill("SIGKILL");
+          }
+        } catch (e: any) {
+          logger.debug('Error sending SIGKILL (process may already be dead):', e.message);
         }
       }, 5000);
+    } else {
+      logger.debug('Kill called but no process exists');
     }
+  }
+
+  /**
+   * Check if process is still running
+   */
+  isRunning(): boolean {
+    return this.process !== undefined && !this.process.killed;
   }
 }

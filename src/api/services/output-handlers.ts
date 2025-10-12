@@ -26,6 +26,11 @@ export interface OutputHandler {
   onComplete(result: ClaudeRunResult, durationMs: number): Promise<void>;
 
   /**
+   * Called when task is cancelled
+   */
+  onCancel(durationMs: number): Promise<void>;
+
+  /**
    * Cleanup resources
    */
   cleanup(): Promise<void>;
@@ -91,6 +96,18 @@ export class SSEOutputHandler implements OutputHandler {
         stderr: result.error
       })}\n\n`);
     }
+
+    this.res.end();
+  }
+
+  async onCancel(_durationMs: number): Promise<void> {
+    if (this.connectionClosed) return;
+
+    logger.info('Task cancelled by user');
+
+    this.res.write(`event: cancelled\ndata: ${JSON.stringify({
+      message: 'Task cancelled by user'
+    })}\n\n`);
 
     this.res.end();
   }
@@ -216,6 +233,54 @@ export class GCSOutputHandler implements OutputHandler {
     await this.callWebhook(callbackPayload);
 
     logger.info(`[TASK ${this.taskId}] Task completed successfully in ${durationMs}ms`);
+  }
+
+  async onCancel(durationMs: number): Promise<void> {
+    logger.info(`[TASK ${this.taskId}] Task cancelled by user`);
+
+    const cancelledAt = new Date().toISOString();
+
+    // Save cancellation metadata
+    const cancelMetadata: AsyncTaskMetadata = {
+      taskId: this.taskId,
+      status: 'cancelled',
+      callbackUrl: this.callbackUrl,
+      createdAt: this.startedAt,
+      startedAt: this.startedAt,
+      completedAt: cancelledAt,
+      cancelledAt,
+      error: 'Task cancelled by user',
+      metadata: this.metadata
+    };
+
+    try {
+      await this.gcsLogger.saveMetadata(this.taskId, cancelMetadata);
+    } catch (error: any) {
+      logger.error(`[TASK ${this.taskId}] Failed to save cancellation metadata:`, error.message);
+    }
+
+    // Prepare callback payload
+    const callbackPayload: AsyncTaskResult = {
+      taskId: this.taskId,
+      status: 'cancelled',
+      exitCode: 130, // Standard exit code for SIGTERM (cancelled)
+      logsPath: this.gcsLogger.getLogsPath(this.taskId),
+      summary: {
+        durationMs,
+        turns: this.turnCount > 0 ? this.turnCount : undefined,
+        errors: this.errorCount > 0 ? this.errorCount : undefined,
+        startedAt: this.startedAt,
+        completedAt: cancelledAt,
+        cancelledAt
+      },
+      error: 'Task cancelled by user',
+      metadata: this.metadata
+    };
+
+    // Call webhook
+    await this.callWebhook(callbackPayload);
+
+    logger.info(`[TASK ${this.taskId}] Task cancellation handled in ${durationMs}ms`);
   }
 
   async cleanup(): Promise<void> {

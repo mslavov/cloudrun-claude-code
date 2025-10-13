@@ -83,6 +83,84 @@ export class GCSLoggerService {
       .map(file => file.name)
       .sort(); // Chunks are named with timestamps, so sorting gives chronological order
   }
+
+  /**
+   * Store encrypted task payload in GCS
+   * Path: tasks/{taskId}/payload.enc
+   */
+  async storeEncryptedPayload(
+    taskId: string,
+    encryptedData: Buffer
+  ): Promise<string> {
+    const filePath = `tasks/${taskId}/payload.enc`;
+    const file = this.bucket.file(filePath);
+
+    try {
+      await file.save(encryptedData, {
+        contentType: 'application/octet-stream',
+        metadata: {
+          metadata: {
+            taskId,
+            encrypted: 'true',
+            encryptedAt: new Date().toISOString()
+          }
+        }
+      });
+
+      const gcsPath = `gs://${this.bucketName}/${filePath}`;
+      logger.debug(`✓ Encrypted payload stored for task ${taskId} at ${gcsPath}`);
+      return gcsPath;
+    } catch (error: any) {
+      logger.error(`Failed to store encrypted payload for task ${taskId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Read encrypted payload from GCS
+   */
+  async readEncryptedPayload(taskId: string): Promise<Buffer> {
+    const filePath = `tasks/${taskId}/payload.enc`;
+    const file = this.bucket.file(filePath);
+
+    try {
+      const [contents] = await file.download();
+      logger.debug(`✓ Encrypted payload read for task ${taskId} (${contents.length} bytes)`);
+      return contents;
+    } catch (error: any) {
+      logger.error(`Failed to read encrypted payload for task ${taskId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete encrypted payload from GCS (cleanup after job completion)
+   * Idempotent - doesn't fail if file doesn't exist
+   */
+  async deleteEncryptedPayload(taskId: string): Promise<void> {
+    const filePath = `tasks/${taskId}/payload.enc`;
+    const file = this.bucket.file(filePath);
+
+    try {
+      await file.delete();
+      logger.info(`[TASK ${taskId}] Deleted encrypted payload`);
+    } catch (error: any) {
+      // Don't fail if already deleted (idempotent)
+      if (error.code === 404) {
+        logger.debug(`Encrypted payload for task ${taskId} already deleted or doesn't exist`);
+      } else {
+        logger.error(`Failed to delete encrypted payload for task ${taskId}:`, error.message);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Get encrypted payload GCS path
+   */
+  getEncryptedPayloadPath(taskId: string): string {
+    return `gs://${this.bucketName}/tasks/${taskId}/payload.enc`;
+  }
 }
 
 /**

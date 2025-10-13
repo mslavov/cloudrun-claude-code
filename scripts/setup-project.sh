@@ -141,9 +141,18 @@ if [ -n "$GCS_LOGS_BUCKET" ]; then
       --quiet
     echo "✓ GCS bucket created"
 
-    # Set lifecycle policy to auto-delete logs after 30 days
-    echo "Setting lifecycle policy (auto-delete after 30 days)..."
-    cat > /tmp/lifecycle-${GCS_LOGS_BUCKET}.json << 'EOF'
+    # Set lifecycle policy
+    # - Delete logs after 30 days (sessions/)
+    # - Delete encrypted payloads after 1 day (tasks/)
+    echo "Setting lifecycle policy..."
+    if [ -f "${DIR}/../gcs-lifecycle.json" ]; then
+      gcloud storage buckets update "gs://${GCS_LOGS_BUCKET}" \
+        --lifecycle-file="${DIR}/../gcs-lifecycle.json" \
+        --quiet
+      echo "✓ Lifecycle policy configured (30-day logs, 1-day encrypted payloads)"
+    else
+      echo "⚠️  gcs-lifecycle.json not found, using default policy"
+      cat > /tmp/lifecycle-${GCS_LOGS_BUCKET}.json << 'EOF'
 {
   "lifecycle": {
     "rule": [{
@@ -153,11 +162,12 @@ if [ -n "$GCS_LOGS_BUCKET" ]; then
   }
 }
 EOF
-    gcloud storage buckets update "gs://${GCS_LOGS_BUCKET}" \
-      --lifecycle-file=/tmp/lifecycle-${GCS_LOGS_BUCKET}.json \
-      --quiet
-    rm -f /tmp/lifecycle-${GCS_LOGS_BUCKET}.json
-    echo "✓ Lifecycle policy configured"
+      gcloud storage buckets update "gs://${GCS_LOGS_BUCKET}" \
+        --lifecycle-file=/tmp/lifecycle-${GCS_LOGS_BUCKET}.json \
+        --quiet
+      rm -f /tmp/lifecycle-${GCS_LOGS_BUCKET}.json
+      echo "✓ Basic lifecycle policy configured (30-day auto-delete)"
+    fi
   fi
 
   # Grant storage permissions to service account
@@ -181,6 +191,32 @@ else
   echo "    1. Add GCS_LOGS_BUCKET to .env"
   echo "    2. Run this script again"
   echo "    3. Redeploy with ./scripts/deploy-service.sh"
+fi
+
+# Setup Cloud KMS for payload encryption
+if [ -n "$GCS_LOGS_BUCKET" ]; then
+  echo ""
+  echo "Setting up Cloud KMS for payload encryption..."
+
+  # Enable KMS API
+  echo -n "  Checking cloudkms.googleapis.com... "
+  if gcloud services list --enabled --project="${PROJECT_ID}" 2>/dev/null | grep -q "cloudkms.googleapis.com"; then
+    echo "already enabled"
+  else
+    echo -n "enabling... "
+    gcloud services enable "cloudkms.googleapis.com" --project="${PROJECT_ID}" --quiet
+    echo "done"
+  fi
+
+  # Run KMS setup script
+  if [ -f "${DIR}/setup-kms.sh" ]; then
+    echo "  Running KMS setup..."
+    bash "${DIR}/setup-kms.sh"
+    echo "✓ KMS setup complete"
+  else
+    echo "⚠️  KMS setup script not found: ${DIR}/setup-kms.sh"
+    echo "  Run it manually later: ./scripts/setup-kms.sh"
+  fi
 fi
 
 # Check for required files

@@ -1,0 +1,26 @@
+{
+  "lifecycle": {
+    "rule": [
+      {
+        "action": {
+          "type": "Delete"
+        },
+        "condition": {
+          "age": 30,
+          "matchesPrefix": ["sessions/"]
+        },
+        "description": "Delete task execution logs after 30 days"
+      },
+      {
+        "action": {
+          "type": "Delete"
+        },
+        "condition": {
+          "age": 1,
+          "matchesPrefix": ["tasks/"]
+        },
+        "description": "Delete encrypted task payloads after 1 day (security cleanup)"
+      }
+    ]
+  }
+}

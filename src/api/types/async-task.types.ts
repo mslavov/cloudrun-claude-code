@@ -33,6 +33,9 @@ export interface AsyncRunResponse {
 
   /** Timestamp when task was created */
   createdAt: string;
+
+  /** Cloud Run Job execution name (optional, for tracking) */
+  executionName?: string;
 }
 
 /**

@@ -5,9 +5,11 @@
   "scripts": {
     "dev": "node --env-file=.env --import tsx --watch src/server.ts",
     "build": "tsc -p tsconfig.json",
-    "start": "node --env-file=.env dist/server.js"
+    "start": "node --env-file=.env dist/server.js",
+    "start:job": "node --env-file=.env dist/job-worker.js"
   },
   "dependencies": {
+    "@google-cloud/kms": "^5.2.0",
     "@google-cloud/storage": "^7.17.0",
     "axios": "^1.11.0",
     "body-parser": "^1.20.2",

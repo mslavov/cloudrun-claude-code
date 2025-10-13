@@ -1,29 +1,31 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { TaskService } from "../services/task.service.js";
-import { GCSOutputHandler } from "../services/output-handlers.js";
 import { GCSLoggerService } from "../services/gcs-logger.service.js";
+import { EncryptionService } from "../services/encryption.service.js";
+import { JobTriggerService } from "../services/job-trigger.service.js";
 import { AsyncRunRequest, AsyncRunResponse } from "../types/async-task.types.js";
 import { logger } from "../../utils/logger.js";
 
 /**
  * Async Claude Controller
- * Handles async task creation and background execution
+ * Handles async task creation and Cloud Run Job execution
  */
 export class AsyncClaudeController {
-  private taskService: TaskService;
   private gcsLogger: GCSLoggerService;
+  private encryptionService: EncryptionService;
+  private jobTrigger: JobTriggerService;
 
   constructor() {
-    this.taskService = new TaskService();
     this.gcsLogger = new GCSLoggerService();
+    this.encryptionService = new EncryptionService();
+    this.jobTrigger = new JobTriggerService();
   }
 
   /**
    * POST /run-async
-   * Create and execute an async Claude Code task
+   * Create and execute an async Claude Code task via Cloud Run Job
    *
-   * Returns immediately with task ID while execution continues in background
+   * Returns immediately with task ID while execution continues in separate job container
    */
   async runAsync(req: Request<{}, {}, AsyncRunRequest>, res: Response): Promise<void> {
     logger.debug("POST /run-async - Request received");
@@ -124,45 +126,52 @@ export class AsyncClaudeController {
     }
 
     try {
-      // Calculate logs path (before starting execution)
-      const logsPath = this.gcsLogger.getLogsPath(taskId);
+      // 1. Encrypt the entire payload (contains secrets)
+      logger.info(`[TASK ${taskId}] Encrypting payload with Cloud KMS`);
+      const encryptedPayload = await this.encryptionService.encryptPayload(req.body);
+      logger.debug(`[TASK ${taskId}] Payload encrypted (${encryptedPayload.length} bytes)`);
 
-      // Return immediately with task info
+      // 2. Store encrypted payload in GCS
+      const payloadPath = await this.gcsLogger.storeEncryptedPayload(
+        taskId,
+        encryptedPayload
+      );
+      logger.info(`[TASK ${taskId}] Encrypted payload stored at: ${payloadPath}`);
+
+      // 3. Save non-sensitive metadata
+      await this.gcsLogger.saveMetadata(taskId, {
+        taskId,
+        status: 'pending',
+        callbackUrl,
+        createdAt,
+        encryptedPayloadPath: payloadPath,
+        metadata: metadata || {}
+      });
+      logger.debug(`[TASK ${taskId}] Metadata saved`);
+
+      // 4. Trigger Cloud Run Job (only pass task ID and path)
+      logger.info(`[TASK ${taskId}] Triggering Cloud Run Job`);
+      const executionName = await this.jobTrigger.triggerJobExecution(
+        taskId,
+        payloadPath
+      );
+      logger.info(`[TASK ${taskId}] Job execution triggered: ${executionName}`);
+
+      // 5. Return immediately to client
+      const logsPath = this.gcsLogger.getLogsPath(taskId);
       const response: AsyncRunResponse = {
         taskId,
         status: 'pending',
         logsPath,
-        createdAt
+        createdAt,
+        executionName // Optional: for tracking job execution
       };
 
       logger.info(`[TASK ${taskId}] Task created, returning 202 Accepted`);
       res.status(202).json(response);
 
-      // Start async execution in background
-      // IMPORTANT: This requires Cloud Run to have CPU always allocated!
-      // Otherwise the container will be throttled after returning the response.
-      logger.info(`[TASK ${taskId}] Starting background execution`);
-
-      // Create GCS output handler
-      const outputHandler = new GCSOutputHandler(
-        taskId,
-        callbackUrl,
-        this.gcsLogger,
-        metadata
-      );
-
-      // Execute in background (fire-and-forget)
-      // Node.js will keep the event loop alive while this promise is pending
-      this.taskService.executeTask(req.body, outputHandler, taskId)
-        .catch(error => {
-          // Log error but don't crash the service
-          logger.error(`[TASK ${taskId}] Unhandled error in background execution:`, error);
-        });
-
-      logger.info(`[TASK ${taskId}] Background execution started`);
-
     } catch (error: any) {
-      logger.error("Error creating async task:", error.message, error.stack);
+      logger.error(`[TASK ${taskId}] Error creating async task:`, error.message, error.stack);
 
       // If headers not sent yet, send error response
       if (!res.headersSent) {

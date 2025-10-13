@@ -14,7 +14,7 @@
 
 import { TaskService } from './api/services/task.service.js';
 import { GCSOutputHandler } from './api/services/output-handlers.js';
-import { GCSLoggerService } from './api/services/gcs-logger.service.js';
+import { GCSLoggerService } from './api/services/gcs.service.js';
 import { EncryptionService } from './api/services/encryption.service.js';
 import { logger } from './utils/logger.js';
 

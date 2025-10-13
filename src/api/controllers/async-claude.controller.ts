@@ -1,8 +1,9 @@
 import { Request, Response } from "express";
 import crypto from "crypto";
-import { GCSLoggerService } from "../services/gcs-logger.service.js";
+import { GCSLoggerService } from "../services/gcs.service.js";
 import { EncryptionService } from "../services/encryption.service.js";
 import { JobTriggerService } from "../services/job-trigger.service.js";
+import { TaskRegistry } from "../services/task-registry.service.js";
 import { AsyncRunRequest, AsyncRunResponse } from "../types/async-task.types.js";
 import { logger } from "../../utils/logger.js";
 
@@ -14,11 +15,13 @@ export class AsyncClaudeController {
   private gcsLogger: GCSLoggerService;
   private encryptionService: EncryptionService;
   private jobTrigger: JobTriggerService;
+  private registry: TaskRegistry;
 
   constructor() {
     this.gcsLogger = new GCSLoggerService();
     this.encryptionService = new EncryptionService();
     this.jobTrigger = new JobTriggerService();
+    this.registry = TaskRegistry.getInstance();
   }
 
   /**
@@ -157,7 +160,16 @@ export class AsyncClaudeController {
       );
       logger.info(`[TASK ${taskId}] Job execution triggered: ${executionName}`);
 
-      // 5. Return immediately to client
+      // 5. Register task in registry for cancellation support
+      try {
+        this.registry.register(taskId, executionName, 'async');
+        logger.debug(`[TASK ${taskId}] Task registered in registry`);
+      } catch (error: any) {
+        logger.error(`[TASK ${taskId}] Failed to register task:`, error.message);
+        // Continue anyway - registration is for cancellation only
+      }
+
+      // 6. Return immediately to client
       const logsPath = this.gcsLogger.getLogsPath(taskId);
       const response: AsyncRunResponse = {
         taskId,

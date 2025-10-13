@@ -1,5 +1,5 @@
-import { ClaudeRunner } from "../../claude-runner.js";
 import { logger } from "../../utils/logger.js";
+import { JobTriggerService } from "./job-trigger.service.js";
 
 /**
  * Task information stored in the registry
@@ -8,8 +8,8 @@ export interface TaskInfo {
   /** Task identifier */
   taskId: string;
 
-  /** Claude runner instance */
-  runner: ClaudeRunner;
+  /** Cloud Run Job execution name */
+  executionName: string;
 
   /** Task type (sync or async) */
   type: 'sync' | 'async';
@@ -24,24 +24,23 @@ export interface TaskInfo {
 /**
  * TaskRegistry Service
  *
- * Singleton service for tracking active Claude Code tasks.
+ * Singleton service for tracking active Cloud Run Job executions.
  * Provides:
- * - Concurrency control (enforce max concurrent tasks)
  * - Task cancellation capability
  * - Active task tracking
+ * - Job execution status monitoring
  *
  * Thread-safe for concurrent access.
  */
 export class TaskRegistry {
   private static instance: TaskRegistry;
   private tasks: Map<string, TaskInfo>;
-  private readonly maxConcurrentTasks: number;
+  private jobTrigger: JobTriggerService;
 
   private constructor() {
     this.tasks = new Map();
-    // Security requirement: only 1 task at a time
-    this.maxConcurrentTasks = parseInt(process.env.MAX_CONCURRENT_TASKS || '1', 10);
-    logger.info(`TaskRegistry initialized with max concurrent tasks: ${this.maxConcurrentTasks}`);
+    this.jobTrigger = new JobTriggerService();
+    logger.info(`TaskRegistry initialized (job-based execution mode)`);
   }
 
   /**
@@ -56,18 +55,9 @@ export class TaskRegistry {
 
   /**
    * Register a new task
-   * @throws Error if max concurrent tasks reached
+   * @throws Error if duplicate task ID
    */
-  public register(taskId: string, runner: ClaudeRunner, type: 'sync' | 'async'): void {
-    if (this.tasks.size >= this.maxConcurrentTasks) {
-      const activeTasks = Array.from(this.tasks.keys());
-      logger.warn(`Task registration failed: max concurrent tasks (${this.maxConcurrentTasks}) reached`, {
-        requestedTaskId: taskId,
-        activeTasks
-      });
-      throw new Error(`Maximum concurrent tasks (${this.maxConcurrentTasks}) reached. Active tasks: ${activeTasks.join(', ')}`);
-    }
-
+  public register(taskId: string, executionName: string, type: 'sync' | 'async'): void {
     if (this.tasks.has(taskId)) {
       logger.error(`Task registration failed: duplicate task ID`, { taskId });
       throw new Error(`Task ${taskId} is already registered`);
@@ -75,14 +65,14 @@ export class TaskRegistry {
 
     const taskInfo: TaskInfo = {
       taskId,
-      runner,
+      executionName,
       type,
       startedAt: new Date(),
       cancelling: false
     };
 
     this.tasks.set(taskId, taskInfo);
-    logger.info(`Task registered: ${taskId} (type: ${type}, active: ${this.tasks.size}/${this.maxConcurrentTasks})`);
+    logger.info(`Task registered: ${taskId} (type: ${type}, execution: ${executionName}, active: ${this.tasks.size})`);
   }
 
   /**
@@ -91,7 +81,7 @@ export class TaskRegistry {
   public unregister(taskId: string): void {
     const removed = this.tasks.delete(taskId);
     if (removed) {
-      logger.info(`Task unregistered: ${taskId} (active: ${this.tasks.size}/${this.maxConcurrentTasks})`);
+      logger.info(`Task unregistered: ${taskId} (active: ${this.tasks.size})`);
     } else {
       logger.warn(`Task unregister failed: task not found`, { taskId });
     }
@@ -102,13 +92,6 @@ export class TaskRegistry {
    */
   public getActiveCount(): number {
     return this.tasks.size;
-  }
-
-  /**
-   * Check if registry is at capacity
-   */
-  public isAtCapacity(): boolean {
-    return this.tasks.size >= this.maxConcurrentTasks;
   }
 
   /**
@@ -144,13 +127,19 @@ export class TaskRegistry {
 
     // Mark as cancelling
     taskInfo.cancelling = true;
-    logger.info(`Cancelling task: ${taskId}`);
+    logger.info(`Cancelling task: ${taskId} (execution: ${taskInfo.executionName})`);
 
     try {
-      // Kill the Claude process
-      taskInfo.runner.kill();
-      logger.info(`Task cancelled successfully: ${taskId}`);
-      return true;
+      // Cancel the Cloud Run Job execution
+      const cancelled = await this.jobTrigger.cancelJobExecution(taskInfo.executionName);
+
+      if (cancelled) {
+        logger.info(`Task cancelled successfully: ${taskId}`);
+        return true;
+      } else {
+        logger.warn(`Failed to cancel job execution for task ${taskId} (may have already completed)`);
+        return false;
+      }
     } catch (error: any) {
       logger.error(`Error cancelling task ${taskId}:`, error.message);
       return false;
@@ -170,15 +159,14 @@ export class TaskRegistry {
    */
   public getStats(): {
     active: number;
-    max: number;
-    tasks: Array<{ taskId: string; type: string; startedAt: string; cancelling: boolean }>;
+    tasks: Array<{ taskId: string; type: string; executionName: string; startedAt: string; cancelling: boolean }>;
   } {
     return {
       active: this.tasks.size,
-      max: this.maxConcurrentTasks,
       tasks: Array.from(this.tasks.values()).map(t => ({
         taskId: t.taskId,
         type: t.type,
+        executionName: t.executionName,
         startedAt: t.startedAt.toISOString(),
         cancelling: t.cancelling
       }))

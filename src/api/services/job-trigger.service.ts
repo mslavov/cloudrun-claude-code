@@ -115,4 +115,105 @@ export class JobTriggerService {
       jobUrl: `https://console.cloud.google.com/run/jobs/details/${this.region}/${this.jobName}?project=${this.projectId}`
     };
   }
+
+  /**
+   * Cancel a running Cloud Run Job execution
+   *
+   * @param executionName - Full execution name (e.g., "projects/.../jobs/.../executions/xxx")
+   * @returns true if cancelled successfully, false otherwise
+   */
+  async cancelJobExecution(executionName: string): Promise<boolean> {
+    logger.info(`Cancelling job execution: ${executionName}`);
+
+    try {
+      // Get authenticated client
+      const auth = new GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/cloud-platform']
+      });
+      const client = await auth.getClient();
+      const accessToken = await client.getAccessToken();
+
+      if (!accessToken.token) {
+        throw new Error('Failed to obtain access token');
+      }
+
+      // Construct cancel API URL
+      const url = `https://run.googleapis.com/v2/${executionName}:cancel`;
+
+      logger.debug(`Cancel API URL: ${url}`);
+
+      const response = await axios.post(url, {}, {
+        headers: {
+          'Authorization': `Bearer ${accessToken.token}`,
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000, // 30 second timeout
+        validateStatus: () => true // Don't throw on any status code
+      });
+
+      if (response.status >= 200 && response.status < 300) {
+        logger.info(`Job execution cancelled successfully: ${executionName}`);
+        return true;
+      } else if (response.status === 404) {
+        logger.warn(`Job execution not found (may have already completed): ${executionName}`);
+        return false;
+      } else {
+        logger.error(`Failed to cancel job execution (HTTP ${response.status}):`, response.data);
+        return false;
+      }
+
+    } catch (error: any) {
+      logger.error(`Error cancelling job execution ${executionName}:`, error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Get the status of a Cloud Run Job execution
+   *
+   * @param executionName - Full execution name (e.g., "projects/.../jobs/.../executions/xxx")
+   * @returns Execution status object or null if not found
+   */
+  async getJobExecutionStatus(executionName: string): Promise<any | null> {
+    logger.debug(`Getting status for job execution: ${executionName}`);
+
+    try {
+      // Get authenticated client
+      const auth = new GoogleAuth({
+        scopes: ['https://www.googleapis.com/auth/cloud-platform']
+      });
+      const client = await auth.getClient();
+      const accessToken = await client.getAccessToken();
+
+      if (!accessToken.token) {
+        throw new Error('Failed to obtain access token');
+      }
+
+      // Construct get API URL
+      const url = `https://run.googleapis.com/v2/${executionName}`;
+
+      const response = await axios.get(url, {
+        headers: {
+          'Authorization': `Bearer ${accessToken.token}`
+        },
+        timeout: 30000,
+        validateStatus: () => true
+      });
+
+      if (response.status >= 200 && response.status < 300) {
+        logger.debug(`Job execution status retrieved: ${executionName}`);
+        return response.data;
+      } else if (response.status === 404) {
+        logger.warn(`Job execution not found: ${executionName}`);
+        return null;
+      } else {
+        logger.error(`Failed to get job execution status (HTTP ${response.status}):`, response.data);
+        return null;
+      }
+
+    } catch (error: any) {
+      logger.error(`Error getting job execution status ${executionName}:`, error.message);
+      return null;
+    }
+  }
 }

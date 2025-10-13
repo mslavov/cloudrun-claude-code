@@ -4,14 +4,10 @@ import { HealthController } from "./api/controllers/health.controller.js";
 import { ClaudeController } from "./api/controllers/claude.controller.js";
 import { AsyncClaudeController } from "./api/controllers/async-claude.controller.js";
 import { CancelController } from "./api/controllers/cancel.controller.js";
-import { concurrencyControlMiddleware } from "./api/middleware/concurrency.middleware.js";
 import { logger } from "./utils/logger.js";
 
 const app = express();
 app.use(bodyParser.json({ limit: "2mb" }));
-
-// Apply concurrency control middleware before route handlers
-app.use(concurrencyControlMiddleware);
 
 // Initialize controllers
 const healthController = new HealthController();
@@ -49,12 +45,11 @@ validateEnvironment();
 logger.info("Starting server with environment:", {
   NODE_ENV: process.env.NODE_ENV,
   PORT: port,
-  permissionMode: process.env.PERMISSION_MODE,
-  maxConcurrentTasks: process.env.MAX_CONCURRENT_TASKS || '1'
+  permissionMode: process.env.PERMISSION_MODE
 });
 
 app.listen(port as number, host, () => {
   logger.info(`Server listening on ${host}:${port}`);
-  logger.info(`Concurrency: Application-level enforcement (max ${process.env.MAX_CONCURRENT_TASKS || '1'} task at a time)`);
+  logger.info(`Execution mode: Job-based (all tasks run in Cloud Run Jobs)`);
   logger.info(`Endpoints: /run, /run-async, /cancel/:taskId, /tasks/status, /health`);
 });

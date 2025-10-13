@@ -161,6 +161,153 @@ export class GCSLoggerService {
   getEncryptedPayloadPath(taskId: string): string {
     return `gs://${this.bucketName}/tasks/${taskId}/payload.enc`;
   }
+
+  /**
+   * Read task metadata from GCS
+   * Returns null if metadata doesn't exist yet
+   */
+  async readMetadata(taskId: string): Promise<any | null> {
+    const metadataPath = `sessions/${taskId}/metadata.json`;
+    const file = this.bucket.file(metadataPath);
+
+    try {
+      const [contents] = await file.download();
+      return JSON.parse(contents.toString('utf-8'));
+    } catch (error: any) {
+      if (error.code === 404) {
+        logger.debug(`Metadata not found for task ${taskId} (task may not have started yet)`);
+        return null;
+      }
+      logger.error(`Failed to read metadata for task ${taskId}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Poll for new log chunks and stream lines via callback
+   * Returns the index of the last chunk processed
+   *
+   * @param taskId - Task identifier
+   * @param lastChunkIndex - Index of last chunk already processed (0 for start)
+   * @param onData - Callback for each log line
+   * @returns Index of last chunk processed
+   */
+  async pollNewLogs(
+    taskId: string,
+    lastChunkIndex: number,
+    onData: (line: string) => void
+  ): Promise<number> {
+    const chunks = await this.listLogChunks(taskId);
+
+    if (chunks.length === 0) {
+      logger.debug(`[TASK ${taskId}] No log chunks found yet`);
+      return lastChunkIndex;
+    }
+
+    // Filter chunks we haven't processed yet
+    const newChunks = chunks.filter(chunkName => {
+      // Extract chunk number from filename (format: 001-20250112-103045.jsonl)
+      const match = chunkName.match(/\/(\d+)-/);
+      if (!match) return false;
+      const chunkNum = parseInt(match[1], 10);
+      return chunkNum > lastChunkIndex;
+    }).sort();
+
+    if (newChunks.length === 0) {
+      logger.debug(`[TASK ${taskId}] No new chunks since index ${lastChunkIndex}`);
+      return lastChunkIndex;
+    }
+
+    logger.debug(`[TASK ${taskId}] Processing ${newChunks.length} new chunks`);
+
+    let maxChunkIndex = lastChunkIndex;
+
+    // Read and process each new chunk
+    for (const chunkName of newChunks) {
+      try {
+        const file = this.bucket.file(chunkName);
+        const [contents] = await file.download();
+        const lines = contents.toString('utf-8').split('\n').filter(line => line.trim());
+
+        // Call onData for each line
+        for (const line of lines) {
+          onData(line);
+        }
+
+        // Update max chunk index
+        const match = chunkName.match(/\/(\d+)-/);
+        if (match) {
+          const chunkNum = parseInt(match[1], 10);
+          maxChunkIndex = Math.max(maxChunkIndex, chunkNum);
+        }
+
+        logger.debug(`[TASK ${taskId}] Processed chunk: ${chunkName} (${lines.length} lines)`);
+      } catch (error: any) {
+        logger.error(`[TASK ${taskId}] Failed to read chunk ${chunkName}:`, error.message);
+        // Continue with other chunks even if one fails
+      }
+    }
+
+    return maxChunkIndex;
+  }
+
+  /**
+   * Wait for task completion by polling metadata and streaming logs
+   *
+   * @param taskId - Task identifier
+   * @param onData - Callback for each log line
+   * @param timeoutMs - Maximum time to wait (default: 3600000 = 1 hour)
+   * @param pollIntervalMs - Polling interval (default: 2000 = 2 seconds)
+   * @returns Final metadata when task completes
+   * @throws Error if timeout exceeded or task fails
+   */
+  async waitForCompletion(
+    taskId: string,
+    onData: (line: string) => void,
+    timeoutMs: number = 3600000,
+    pollIntervalMs: number = 2000
+  ): Promise<any> {
+    const startTime = Date.now();
+    let lastChunkIndex = 0;
+    let metadata: any = null;
+
+    logger.info(`[TASK ${taskId}] Waiting for job completion (timeout: ${timeoutMs}ms, poll interval: ${pollIntervalMs}ms)`);
+
+    while (Date.now() - startTime < timeoutMs) {
+      try {
+        // Poll for new logs
+        lastChunkIndex = await this.pollNewLogs(taskId, lastChunkIndex, onData);
+
+        // Check metadata for completion status
+        metadata = await this.readMetadata(taskId);
+
+        if (metadata) {
+          const status = metadata.status;
+          logger.debug(`[TASK ${taskId}] Current status: ${status}`);
+
+          if (status === 'completed' || status === 'failed' || status === 'cancelled') {
+            logger.info(`[TASK ${taskId}] Job ${status}`);
+
+            // Do one final poll for any remaining logs
+            await this.pollNewLogs(taskId, lastChunkIndex, onData);
+
+            return metadata;
+          }
+        }
+
+        // Wait before next poll
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+
+      } catch (error: any) {
+        logger.error(`[TASK ${taskId}] Error during polling:`, error.message);
+        // Continue polling even if there's an error
+        await new Promise(resolve => setTimeout(resolve, pollIntervalMs));
+      }
+    }
+
+    // Timeout exceeded
+    throw new Error(`Timeout waiting for task ${taskId} to complete (${timeoutMs}ms exceeded)`);
+  }
 }
 
 /**

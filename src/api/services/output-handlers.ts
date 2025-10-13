@@ -1,7 +1,7 @@
 import { Request, Response } from "express";
 import axios from "axios";
 import { ClaudeRunResult } from "../../claude-runner.js";
-import { GCSLoggerService, TaskLogger } from "./gcs-logger.service.js";
+import { GCSLoggerService, TaskLogger } from "./gcs.service.js";
 import { AsyncTaskResult, AsyncTaskMetadata } from "../types/async-task.types.js";
 import { logger } from "../../utils/logger.js";
 

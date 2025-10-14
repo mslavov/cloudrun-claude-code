@@ -84,7 +84,9 @@ RUN useradd -m -u 1001 -s /bin/bash serveruser && \
 
 # Configure git for claudeuser
 USER claudeuser
-RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
+RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" && \
+    git config --global user.email "bugzy@ai.testing" && \
+    git config --global user.name "Bugzy AI"
 
 # Switch to claudeuser to run the main server
 # Server code in /app is owned by serveruser with 750 permissions

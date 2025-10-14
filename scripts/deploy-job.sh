@@ -75,7 +75,7 @@ gcloud run jobs ${CMD} "${JOB_NAME}" \
   --set-env-vars="REGION=${LOCATION}" \
   --set-env-vars="GCS_LOGS_BUCKET=${GCS_LOGS_BUCKET}" \
   --set-env-vars="GCS_PROJECT_ID=${PROJECT_ID}" \
-  --set-env-vars="LOG_LEVEL=info" \
+  --set-env-vars="LOG_LEVEL=${LOG_LEVEL:-info}" \
   --set-secrets="CLOUDRUN_CALLBACK_SECRET=CLOUDRUN_CALLBACK_SECRET:latest" \
   --command=node \
   --args=dist/job-worker.js

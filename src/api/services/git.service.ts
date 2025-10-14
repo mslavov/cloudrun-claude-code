@@ -1,5 +1,7 @@
 import simpleGit from "simple-git";
 import { logger } from "../../utils/logger.js";
+import * as fs from "fs";
+import * as path from "path";
 
 export interface GitCloneOptions {
   gitRepo: string;
@@ -99,6 +101,64 @@ export class GitService {
   }
 
   /**
+   * Configure git user identity for commits
+   * Must be called before any git operations that require author info (commit, merge, etc.)
+   *
+   * Reads identity from .gitconfig in repository root if available, otherwise uses defaults
+   */
+  async configureIdentity(
+    workspacePath: string,
+    name?: string,
+    email?: string
+  ): Promise<void> {
+    try {
+      // Try to read from .gitconfig in repository root if name/email not explicitly provided
+      if (!name || !email) {
+        const gitConfigPath = path.join(workspacePath, '.gitconfig');
+
+        if (fs.existsSync(gitConfigPath)) {
+          try {
+            const configContent = fs.readFileSync(gitConfigPath, 'utf-8');
+
+            // Parse [user] section for name and email
+            // Regex matches:  name = Value  or  name=Value
+            const nameMatch = configContent.match(/\[user\][\s\S]*?\bname\s*=\s*(.+)/);
+            const emailMatch = configContent.match(/\[user\][\s\S]*?\bemail\s*=\s*(.+)/);
+
+            if (nameMatch && !name) {
+              name = nameMatch[1].trim();
+            }
+            if (emailMatch && !email) {
+              email = emailMatch[1].trim();
+            }
+
+            if (nameMatch || emailMatch) {
+              logger.debug(`Read git identity from .gitconfig: ${name || '(default)'} <${email || '(default)'}>`);
+            }
+          } catch (readError: any) {
+            logger.debug(`Could not read .gitconfig: ${readError.message}`);
+          }
+        }
+      }
+
+      // Use defaults if still not set
+      name = name || 'Claude Code';
+      email = email || 'noreply@anthropic.com';
+
+      const git = simpleGit(workspacePath);
+
+      // Set local git config for this repository
+      await git.addConfig('user.name', name, false, 'local');
+      await git.addConfig('user.email', email, false, 'local');
+
+      logger.debug(`✓ Git identity configured: ${name} <${email}>`);
+    } catch (error: any) {
+      logger.error('Failed to configure git identity:', error.message);
+      throw new Error(`Failed to configure git identity: ${error.message}`);
+    }
+  }
+
+  /**
    * Check if workspace has uncommitted changes
    */
   async hasChanges(workspacePath: string): Promise<boolean> {
@@ -133,6 +193,9 @@ export class GitService {
     sshKeyPath?: string
   ): Promise<{ sha: string; message: string }> {
     try {
+      // Configure git identity BEFORE any git operations
+      await this.configureIdentity(workspacePath);
+
       const git = simpleGit(workspacePath);
 
       // Configure SSH key if provided

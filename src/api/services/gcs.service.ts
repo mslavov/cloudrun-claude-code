@@ -371,9 +371,12 @@ export class GCSLoggerService {
     const results: Array<{ originalPath: string; gcsPath: string; sizeBytes: number }> = [];
 
     logger.info(`[TASK ${taskId}] Starting file upload for patterns: ${globPatterns.join(', ')}`);
+    logger.info(`[TASK ${taskId}] Searching from workspace: ${workspacePath}`);
 
     for (const pattern of globPatterns) {
       try {
+        logger.debug(`[TASK ${taskId}] Searching for pattern: ${pattern}`);
+
         // Find files matching pattern
         const matches = await glob(pattern, {
           cwd: workspacePath,
@@ -383,11 +386,12 @@ export class GCSLoggerService {
         });
 
         if (matches.length === 0) {
-          logger.debug(`No files found matching pattern: ${pattern}`);
+          logger.warn(`[TASK ${taskId}] No files found matching pattern: ${pattern} in ${workspacePath}`);
           continue;
         }
 
-        logger.info(`Found ${matches.length} files matching pattern: ${pattern}`);
+        logger.info(`[TASK ${taskId}] Found ${matches.length} files matching pattern: ${pattern}`);
+        logger.debug(`[TASK ${taskId}] Matched files: ${matches.map(f => path.basename(f)).join(', ')}`);
 
         // Upload each matched file
         for (const filePath of matches) {
@@ -401,17 +405,22 @@ export class GCSLoggerService {
               sizeBytes: stats.size
             });
           } catch (fileError: any) {
-            logger.error(`Failed to upload file ${filePath}:`, fileError.message);
+            logger.error(`[TASK ${taskId}] Failed to upload file ${filePath}:`, fileError.message);
             // Continue with other files even if one fails
           }
         }
       } catch (patternError: any) {
-        logger.error(`Failed to process glob pattern ${pattern}:`, patternError.message);
+        logger.error(`[TASK ${taskId}] Failed to process glob pattern ${pattern}:`, patternError.message);
         // Continue with other patterns
       }
     }
 
-    logger.info(`[TASK ${taskId}] Uploaded ${results.length} files to GCS`);
+    if (results.length > 0) {
+      const totalBytes = results.reduce((sum, r) => sum + r.sizeBytes, 0);
+      logger.info(`[TASK ${taskId}] ✓ Successfully uploaded ${results.length} files to GCS (total: ${(totalBytes / 1024).toFixed(2)} KB)`);
+    } else {
+      logger.warn(`[TASK ${taskId}] No files were uploaded - no matches found for any patterns`);
+    }
 
     return results;
   }

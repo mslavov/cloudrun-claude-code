@@ -49,7 +49,7 @@ RUN npm install -g @anthropic-ai/claude-code
 # Install Playwright and MCP server globally
 # This prevents re-downloading packages at runtime for faster MCP startup
 RUN npm install -g @playwright/test @playwright/mcp && \
-    npx playwright install chrome --with-deps
+    npx playwright install chromium --with-deps
 
 # Set up environment
 ENV NODE_ENV=production
@@ -84,9 +84,7 @@ RUN useradd -m -u 1001 -s /bin/bash serveruser && \
 
 # Configure git for claudeuser
 USER claudeuser
-RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null" && \
-    git config --global user.email "bugzy@ai.testing" && \
-    git config --global user.name "Bugzy AI"
+RUN git config --global core.sshCommand "ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null"
 
 # Switch to claudeuser to run the main server
 # Server code in /app is owned by serveruser with 750 permissions

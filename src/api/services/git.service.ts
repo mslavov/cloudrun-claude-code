@@ -1,4 +1,4 @@
-import simpleGit, { SimpleGit } from "simple-git";
+import simpleGit from "simple-git";
 import { logger } from "../../utils/logger.js";
 
 export interface GitCloneOptions {
@@ -10,17 +10,6 @@ export interface GitCloneOptions {
 }
 
 export class GitService {
-  private git: SimpleGit;
-
-  constructor() {
-    this.git = simpleGit({
-      baseDir: '/tmp',
-      binary: 'git',
-      maxConcurrentProcesses: 1,
-      trimmed: false,
-    });
-  }
-
   // Validate git repository URL
   isValidGitUrl(gitRepo: string): boolean {
     return !!gitRepo.match(/^(git@|https?:\/\/)/);
@@ -90,7 +79,7 @@ export class GitService {
     } catch (error: any) {
       // Log the actual error for debugging
       logger.error("Git clone failed with error:", error.message);
-      
+
       // Provide more helpful error messages
       let errorMessage = error.message;
       if (error.message.includes('Could not read from remote repository')) {
@@ -104,8 +93,164 @@ export class GitService {
       } else if (error.message.includes('Host key verification failed')) {
         errorMessage = 'SSH host key verification failed. This should be handled by StrictHostKeyChecking=no.';
       }
-      
+
       throw new Error(`Failed to clone repository: ${errorMessage}`);
     }
+  }
+
+  /**
+   * Check if workspace has uncommitted changes
+   */
+  async hasChanges(workspacePath: string): Promise<boolean> {
+    try {
+      const git = simpleGit(workspacePath);
+      const status = await git.status();
+
+      // Check for modified, added, deleted, or untracked files
+      const hasChanges = status.files.length > 0;
+
+      if (hasChanges) {
+        logger.debug(`Workspace has ${status.files.length} changed files`);
+      } else {
+        logger.debug('Workspace has no changes');
+      }
+
+      return hasChanges;
+    } catch (error: any) {
+      logger.error('Failed to check git status:', error.message);
+      throw new Error(`Failed to check for changes: ${error.message}`);
+    }
+  }
+
+  /**
+   * Commit changes in workspace
+   * Optionally specify files to commit (defaults to all changes)
+   */
+  async commit(
+    workspacePath: string,
+    message: string,
+    files?: string[],
+    sshKeyPath?: string
+  ): Promise<{ sha: string; message: string }> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      // Configure SSH key if provided
+      if (sshKeyPath) {
+        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      // Stage files
+      if (files && files.length > 0) {
+        logger.debug(`Staging specific files: ${files.join(', ')}`);
+        await git.add(files);
+      } else {
+        logger.debug('Staging all changes');
+        await git.add('-A');
+      }
+
+      // Check if there's anything to commit after staging
+      const status = await git.status();
+      if (status.staged.length === 0) {
+        logger.debug('No changes staged for commit');
+        throw new Error('No changes to commit after staging');
+      }
+
+      // Create commit
+      logger.debug(`Creating commit with ${status.staged.length} staged files`);
+      const commitResult = await git.commit(message);
+
+      logger.debug(`✓ Commit created: ${commitResult.commit}`);
+
+      return {
+        sha: commitResult.commit,
+        message: message
+      };
+    } catch (error: any) {
+      logger.error('Failed to commit changes:', error.message);
+      throw new Error(`Failed to commit: ${error.message}`);
+    }
+  }
+
+  /**
+   * Push commits to remote repository
+   */
+  async push(
+    workspacePath: string,
+    branch: string = 'main',
+    sshKeyPath?: string,
+    force: boolean = false
+  ): Promise<void> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      // Configure SSH key if provided
+      if (sshKeyPath) {
+        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      logger.debug(`Pushing to remote (branch: ${branch}, force: ${force})`);
+
+      const pushOptions = force ? ['--force'] : [];
+
+      // Push with timeout
+      const pushPromise = git.push('origin', branch, pushOptions);
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Git push operation timed out after 30 seconds')), 30000);
+      });
+
+      await Promise.race([pushPromise, timeoutPromise]);
+
+      logger.debug('✓ Push completed successfully');
+    } catch (error: any) {
+      logger.error('Failed to push changes:', error.message);
+
+      // Provide helpful error messages
+      let errorMessage = error.message;
+      if (error.message.includes('Could not read from remote repository')) {
+        errorMessage = 'Authentication failed. Ensure SSH key has write access to the repository.';
+      } else if (error.message.includes('Permission denied')) {
+        errorMessage = 'SSH key authentication failed or insufficient permissions.';
+      } else if (error.message.includes('rejected')) {
+        errorMessage = 'Push rejected. Remote has changes that are not in local branch. Consider fetching first.';
+      }
+
+      throw new Error(`Failed to push: ${errorMessage}`);
+    }
+  }
+
+  /**
+   * Commit and push changes in one operation
+   * Convenience method that combines commit + push
+   */
+  async commitAndPush(
+    workspacePath: string,
+    message: string,
+    options: {
+      files?: string[];
+      branch?: string;
+      sshKeyPath?: string;
+      force?: boolean;
+    } = {}
+  ): Promise<{ sha: string; message: string; pushed: boolean }> {
+    const { files, branch = 'main', sshKeyPath, force = false } = options;
+
+    // Check if there are changes
+    const hasChanges = await this.hasChanges(workspacePath);
+    if (!hasChanges) {
+      logger.info('No changes to commit and push');
+      throw new Error('No changes to commit');
+    }
+
+    // Commit
+    const commitResult = await this.commit(workspacePath, message, files, sshKeyPath);
+
+    // Push
+    await this.push(workspacePath, branch, sshKeyPath, force);
+
+    return {
+      ...commitResult,
+      pushed: true
+    };
   }
 }

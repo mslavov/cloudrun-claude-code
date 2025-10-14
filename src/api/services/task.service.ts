@@ -68,6 +68,11 @@ export class TaskService {
       // Create subdirectory if needed
       await this.workspaceService.createSubdirectory(workspaceRoot, request.cwdRelative || '.');
 
+      // Set workspace details on output handler (for post-execution actions)
+      if (outputHandler && 'setWorkspaceDetails' in outputHandler) {
+        (outputHandler as any).setWorkspaceDetails(workspaceRoot, sshKeyPath);
+      }
+
       // Setup environment (secrets, proxy config, SSH)
       const claudeEnv = await this.setupEnvironment(
         workspaceRoot,

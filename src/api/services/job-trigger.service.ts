@@ -92,7 +92,7 @@ export class JobTriggerService {
         const data = error.response.data;
 
         if (status === 404) {
-          throw new Error(`Cloud Run Job "${this.jobName}" not found in ${this.region}. Create it first with scripts/create-job.sh`);
+          throw new Error(`Cloud Run Job "${this.jobName}" not found in ${this.region}. Deploy it first with scripts/deploy-job.sh`);
         } else if (status === 403) {
           throw new Error(`Permission denied to run job "${this.jobName}". Grant service account roles/run.developer permission.`);
         } else {

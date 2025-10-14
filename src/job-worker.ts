@@ -65,7 +65,10 @@ async function main() {
       taskId,
       callbackUrl,
       gcsLogger,
-      payload.metadata
+      payload.metadata,
+      undefined, // workspaceRoot - will be set by taskService after workspace creation
+      undefined, // sshKeyPath - will be set by taskService after workspace creation
+      payload.postExecutionActions // post-execution actions from request
     );
 
     // 5. Execute task with decrypted payload

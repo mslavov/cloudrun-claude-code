@@ -16,6 +16,42 @@ export interface AsyncRunRequest extends RunRequest {
    * Must be unique and URL-safe
    */
   taskId?: string;
+
+  /**
+   * Post-execution actions to perform after task completes
+   */
+  postExecutionActions?: {
+    /**
+     * Git operations (commit and/or push)
+     */
+    git?: {
+      /** Whether to create a git commit */
+      commit: boolean;
+
+      /** Custom commit message (optional) */
+      commitMessage?: string;
+
+      /** Whether to push to remote */
+      push: boolean;
+
+      /** Git branch to push to (default: 'main') */
+      branch?: string;
+
+      /** Specific files to commit (optional, defaults to all changes) */
+      files?: string[];
+    };
+
+    /**
+     * File upload operations
+     */
+    uploadFiles?: {
+      /** Glob patterns for files to upload (e.g., [".playwright/**\/*.webm"]) */
+      globPatterns: string[];
+
+      /** Optional prefix in GCS bucket */
+      gcsPrefix?: string;
+    };
+  };
 }
 
 /**
@@ -85,6 +121,33 @@ export interface AsyncTaskResult {
 
   /** User-provided metadata from original request */
   metadata?: Record<string, any>;
+
+  /** Uploaded files (if postExecutionActions.uploadFiles was requested) */
+  uploadedFiles?: Array<{
+    /** Original file path in workspace */
+    originalPath: string;
+
+    /** GCS path where file was uploaded */
+    gcsPath: string;
+
+    /** File size in bytes */
+    sizeBytes: number;
+  }>;
+
+  /** Git commit information (if postExecutionActions.git was requested) */
+  gitCommit?: {
+    /** Commit SHA */
+    sha: string;
+
+    /** Commit message */
+    message: string;
+
+    /** Whether commit was pushed to remote */
+    pushed: boolean;
+
+    /** Branch that was pushed to */
+    branch?: string;
+  };
 }
 
 /**

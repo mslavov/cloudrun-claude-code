@@ -50,7 +50,7 @@ JOB_EXISTS=$(gcloud run jobs describe "${JOB_NAME}" \
 
 if [ -z "$JOB_EXISTS" ]; then
   echo "❌ Job '${JOB_NAME}' not found in ${LOCATION}"
-  echo "Create the job first: ./scripts/create-job.sh"
+  echo "Deploy the job first: ./scripts/deploy-job.sh"
   exit 1
 fi
 

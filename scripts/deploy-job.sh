@@ -1,27 +1,21 @@
 #!/bin/bash
 #
-# Create Cloud Run Job for async task execution
-# This script creates the job definition that will run job-worker.js
+# Deploy Cloud Run Job for async task execution
+# This script creates or updates the job definition that will run job-worker.js
 #
 
 set -e
 
-# Check if .env file exists
-if [ ! -f .env ]; then
-  echo "Error: .env file not found"
-  echo "Create a .env file with PROJECT_ID and REGION"
-  exit 1
-fi
-
 # Load environment variables
-source .env
+DIR="$( cd "$( dirname "${BASH_SOURCE[0]}" )" && pwd )"
+source "${DIR}/load-env.sh"
 
 # Set defaults
 LOCATION="${REGION:-europe-west3}"
 JOB_NAME="claude-code-async-worker"
 IMAGE_NAME="claude-code"
 
-echo "=== Creating Cloud Run Job ==="
+echo "=== Deploying Cloud Run Job ==="
 echo ""
 echo "Project: ${PROJECT_ID}"
 echo "Location: ${LOCATION}"
@@ -56,21 +50,13 @@ JOB_EXISTS=$(gcloud run jobs describe "${JOB_NAME}" \
   --format="value(metadata.name)" 2>/dev/null || echo "")
 
 if [ -n "$JOB_EXISTS" ]; then
-  echo ""
-  echo "⚠️  Job '${JOB_NAME}' already exists"
-  echo ""
-  read -p "Do you want to update it? (y/N): " -n 1 -r
-  echo
-  if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-    echo "Skipping job creation"
-    exit 0
-  fi
-
   OPERATION="Updating"
   CMD="update"
+  echo "ℹ️  Job '${JOB_NAME}' already exists - will update"
 else
   OPERATION="Creating"
   CMD="create"
+  echo "✨ Job '${JOB_NAME}' does not exist - will create"
 fi
 
 echo ""

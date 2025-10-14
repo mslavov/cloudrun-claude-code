@@ -1,6 +1,9 @@
 import { Storage, Bucket, File } from "@google-cloud/storage";
 import { logger } from "../../utils/logger.js";
 import { Writable } from "stream";
+import { glob } from "glob";
+import * as fs from "fs";
+import * as path from "path";
 
 /**
  * GCS Logger Service
@@ -307,6 +310,110 @@ export class GCSLoggerService {
 
     // Timeout exceeded
     throw new Error(`Timeout waiting for task ${taskId} to complete (${timeoutMs}ms exceeded)`);
+  }
+
+  /**
+   * Upload a single file to GCS
+   * @param taskId - Task identifier for organizing uploads
+   * @param filePath - Absolute path to file to upload
+   * @param gcsPrefix - Optional prefix in bucket (default: files/{taskId})
+   * @returns GCS path of uploaded file
+   */
+  async uploadFile(
+    taskId: string,
+    filePath: string,
+    gcsPrefix?: string
+  ): Promise<string> {
+    const fileName = path.basename(filePath);
+    const prefix = gcsPrefix || `files/${taskId}`;
+    const gcsPath = `${prefix}/${fileName}`;
+    const file = this.bucket.file(gcsPath);
+
+    try {
+      const fileContents = await fs.promises.readFile(filePath);
+      const stats = await fs.promises.stat(filePath);
+
+      await file.save(fileContents, {
+        metadata: {
+          metadata: {
+            taskId,
+            originalPath: filePath,
+            uploadedAt: new Date().toISOString(),
+            sizeBytes: stats.size.toString()
+          }
+        }
+      });
+
+      const fullGcsPath = `gs://${this.bucketName}/${gcsPath}`;
+      logger.info(`✓ Uploaded file: ${filePath} → ${fullGcsPath} (${stats.size} bytes)`);
+
+      return fullGcsPath;
+    } catch (error: any) {
+      logger.error(`Failed to upload file ${filePath}:`, error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Upload files matching glob patterns to GCS
+   * @param taskId - Task identifier
+   * @param workspacePath - Root directory to search from
+   * @param globPatterns - Array of glob patterns (e.g., [".playwright/**\/*.webm"])
+   * @param gcsPrefix - Optional prefix in bucket
+   * @returns Array of upload results with original path and GCS path
+   */
+  async uploadFilesByGlob(
+    taskId: string,
+    workspacePath: string,
+    globPatterns: string[],
+    gcsPrefix?: string
+  ): Promise<Array<{ originalPath: string; gcsPath: string; sizeBytes: number }>> {
+    const results: Array<{ originalPath: string; gcsPath: string; sizeBytes: number }> = [];
+
+    logger.info(`[TASK ${taskId}] Starting file upload for patterns: ${globPatterns.join(', ')}`);
+
+    for (const pattern of globPatterns) {
+      try {
+        // Find files matching pattern
+        const matches = await glob(pattern, {
+          cwd: workspacePath,
+          absolute: true,
+          nodir: true,
+          ignore: ['**/node_modules/**', '**/.git/**']
+        });
+
+        if (matches.length === 0) {
+          logger.debug(`No files found matching pattern: ${pattern}`);
+          continue;
+        }
+
+        logger.info(`Found ${matches.length} files matching pattern: ${pattern}`);
+
+        // Upload each matched file
+        for (const filePath of matches) {
+          try {
+            const stats = await fs.promises.stat(filePath);
+            const gcsPath = await this.uploadFile(taskId, filePath, gcsPrefix);
+
+            results.push({
+              originalPath: filePath,
+              gcsPath,
+              sizeBytes: stats.size
+            });
+          } catch (fileError: any) {
+            logger.error(`Failed to upload file ${filePath}:`, fileError.message);
+            // Continue with other files even if one fails
+          }
+        }
+      } catch (patternError: any) {
+        logger.error(`Failed to process glob pattern ${pattern}:`, patternError.message);
+        // Continue with other patterns
+      }
+    }
+
+    logger.info(`[TASK ${taskId}] Uploaded ${results.length} files to GCS`);
+
+    return results;
   }
 }
 

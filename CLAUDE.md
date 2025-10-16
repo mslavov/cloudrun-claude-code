@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-This is a Cloud Run service that wraps the Claude Code TypeScript SDK to provide a production-ready deployment with dynamic configuration for MCP servers, system prompts, and tool permissions. The service runs Claude Code CLI in ephemeral containers with per-request isolation.
+This is a Cloud Run service that wraps the Claude Code TypeScript SDK to provide a production-ready deployment with dynamic configuration for MCP servers, system prompts, and tool permissions.
+
+**Execution Architecture:** The service uses a **Cloud Run Jobs architecture** where:
+- API service (/run and /run-async endpoints) triggers Cloud Run Job executions
+- Jobs run in isolated containers with ephemeral workspaces
+- Credentials encrypted with Cloud KMS and securely passed to jobs
+- All task execution happens in Cloud Run Jobs, not in the API service process
+
+This architecture provides better resource isolation, improved security with KMS encryption, and eliminates the need for CPU-always-allocated billing.
 
 ## Documentation Guides
 
@@ -14,6 +22,9 @@ This repository includes comprehensive documentation:
 - **docs/testing.md**: Complete testing guide with local and remote testing instructions
 - **docs/api-reference.md**: Complete API reference for /run and /run-async endpoints
 - **docs/async-tasks.md**: Comprehensive guide for async task execution with GCS logging
+- **docs/cloud-run-jobs.md**: Cloud Run Jobs architecture and execution model
+- **docs/kms-setup.md**: Cloud KMS setup for secure credential handling
+- **docs/post-execution-actions.md**: Git operations and file upload automation
 - **docs/index.md**: Documentation index with links to all guides
 
 When working on deployment, testing, or async tasks, read the appropriate guide first for complete instructions and commands.
@@ -44,45 +55,72 @@ For deployment and service account setup commands, refer to docs/deployment.md a
 ## Architecture
 
 ### Core Components
-- **src/server.ts**: Express server handling /run and /run-async endpoints, SSE streaming, request validation
-- **src/api/controllers/claude.controller.ts**: Sync endpoint controller (SSE streaming)
-- **src/api/controllers/async-claude.controller.ts**: Async endpoint controller (GCS logging)
-- **src/api/services/task.service.ts**: Unified task execution service for both sync and async
-- **src/api/services/gcs-logger.service.ts**: Streams JSONL logs to Google Cloud Storage
+
+**API Service (Cloud Run Service):**
+- **src/server.ts**: Express server handling /run and /run-async endpoints, triggers Cloud Run Jobs
+- **src/api/controllers/claude.controller.ts**: Sync endpoint controller - triggers job and streams logs via SSE
+- **src/api/controllers/async-claude.controller.ts**: Async endpoint controller - triggers job and returns immediately
+- **src/api/controllers/cancel.controller.ts**: Task cancellation and status endpoints
+- **src/api/services/job-trigger.service.ts**: Triggers Cloud Run Job executions via Cloud Run Admin API
+- **src/api/services/encryption.service.ts**: Cloud KMS integration for encrypting/decrypting task payloads
+- **src/api/services/gcs.service.ts**: GCS operations - logs, encrypted payloads, file uploads
+
+**Job Worker (Cloud Run Job):**
+- **src/job-worker.ts**: Job entrypoint - reads encrypted payload, decrypts, executes task
+- **src/api/services/task.service.ts**: Task execution service (used only by job worker)
+- **src/api/services/git.service.ts**: Git operations - clone, commit, push
 - **src/api/services/output-handlers.ts**: Output handler pattern (SSE vs GCS)
 - **src/claude-runner.ts**: Manages Claude CLI subprocess spawning with two execution modes (named pipe or direct stdin)
+
+**Shared:**
 - **Dockerfile**: Multi-stage build installing Claude Code via official script, runs as non-root user
 
 ### Request Flow (Sync - /run)
 1. Client sends POST to /run with prompt and configuration
-2. Server creates ephemeral workspace in /tmp
-3. TaskService executes via ClaudeRunner subprocess
-4. Output streams back to client via Server-Sent Events (SSE) using SSEOutputHandler
-5. Workspace cleaned up after request completion (5s delay)
+2. API service validates request and generates task ID
+3. API service encrypts payload with Cloud KMS and stores in GCS
+4. API service triggers Cloud Run Job execution with task ID
+5. Job worker starts:
+   - Reads encrypted payload from GCS
+   - Decrypts payload using Cloud KMS
+   - Creates ephemeral workspace in /tmp
+   - Executes Claude Code CLI via TaskService
+   - Streams output to GCS
+6. API service polls GCS logs and streams to client via SSE
+7. On completion, job worker cleans up workspace and exits
+8. API service sends final SSE event and closes connection
 
 ### Request Flow (Async - /run-async)
 1. Client sends POST to /run-async with prompt, callbackUrl, configuration
-2. Server validates request and returns 202 Accepted with task ID immediately
-3. Task executes in background:
+2. API service validates request and generates task ID
+3. API service encrypts payload with Cloud KMS and stores in GCS
+4. API service triggers Cloud Run Job execution with task ID
+5. API service returns 202 Accepted immediately with task ID and logs path
+6. Job worker executes asynchronously:
+   - Reads encrypted payload from GCS
+   - Decrypts payload using Cloud KMS
    - Creates ephemeral workspace in /tmp
-   - TaskService executes via ClaudeRunner subprocess
-   - Output streams to GCS bucket via GCSOutputHandler
-   - Logs written in chunks (100 lines per chunk as JSONL)
-4. On completion:
-   - POSTs results to callback URL with task summary
-   - Saves final metadata to GCS
-   - Workspace cleaned up immediately
-5. Logs persist in GCS at `gs://bucket/sessions/{taskId}/`
+   - Executes Claude Code CLI via TaskService
+   - Streams output to GCS in real-time
+   - Executes post-execution actions (git commit/push, file uploads) if configured
+   - Calls webhook with results and metadata
+   - Cleans up workspace and exits
+7. Logs persist in GCS at `gs://bucket/sessions/{taskId}/`
+8. Encrypted payload deleted after execution
 
 ### Key Design Decisions
-- **Ephemeral Workspaces**: Each request gets isolated /tmp/ws-{requestId} directory
+- **Cloud Run Jobs Architecture**: All task execution happens in isolated Cloud Run Job containers, not in API service
+- **KMS Encryption**: Task payloads encrypted with Cloud KMS before storage, decrypted in job worker
+- **Ephemeral Workspaces**: Each request gets isolated /tmp/ws-{requestId} directory in job container
 - **Two Execution Modes**: Named pipe method (better for large prompts) or direct stdin
-- **Output Handler Pattern**: SSE for sync, GCS streaming for async (strategy pattern)
+- **Output Handler Pattern**: SSE for sync (via GCS polling), GCS streaming for async (strategy pattern)
 - **Chunked GCS Writes**: Logs buffered and written in 100-line chunks to minimize GCS operations
 - **Global Claude Installation**: Claude Code installed globally in Docker following official pattern
 - **Dynamic Configuration**: MCP servers, system prompts, tools configured per-request
 - **Authentication**: Payload-based authentication with token proxy for security
-- **Async Task Isolation**: Background execution doesn't block HTTP connection, enables long-running tasks
+- **Job-Based Isolation**: No CPU-always-allocated needed, better resource isolation, independent scaling
+- **Post-Execution Actions**: Git operations and file uploads executed automatically after task completion
+- **Git Service**: Comprehensive git operations with identity configuration from .gitconfig
 
 ## Authentication Methods
 
@@ -122,14 +160,50 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `callbackUrl` (required): Webhook URL to POST results when task completes
 - `taskId`: Custom task ID (auto-generated UUID if not provided, must be URL-safe)
 - `metadata`: Optional metadata object returned in callback payload
+- `postExecutionActions`: Post-execution actions to perform after task completes (see below)
+
+**Post-Execution Actions (async only):**
+```json
+{
+  "postExecutionActions": {
+    "git": {
+      "commit": true,                  // Create git commit
+      "commitMessage": "...",          // Custom commit message (optional)
+      "push": true,                    // Push to remote
+      "branch": "main",                // Branch to push to (default: main)
+      "files": ["src/**"]              // Specific files to commit (optional)
+    },
+    "uploadFiles": {
+      "globPatterns": ["*.log", "dist/**"],  // Files to upload to GCS
+      "gcsPrefix": "optional/prefix"          // Optional prefix in GCS bucket
+    }
+  }
+}
+```
+
+When configured:
+- Git operations execute after task completion if changes detected
+- Files matching glob patterns uploaded to task's GCS session path
+- Results included in webhook callback (`gitCommit` and `uploadedFiles` fields)
+- Git identity read from `.gitconfig` file in repository or uses defaults
 
 ### Environment Variables
+
+**Required for Both Endpoints:**
+- `GCS_LOGS_BUCKET`: GCS bucket name for task logs and encrypted payloads (required for both /run and /run-async)
+- `KMS_KEY_RING`: Cloud KMS key ring name (created by setup-kms.sh)
+- `KMS_KEY_NAME`: Cloud KMS key name (created by setup-kms.sh)
+- `KMS_LOCATION`: Cloud KMS location (default: global)
+- `CLOUDRUN_JOB_NAME`: Name of the Cloud Run Job (created by deploy-job.sh)
+
+**Optional:**
 - `PORT`: Server port (default: 8080)
 - `ALLOWED_TOOLS`: Default allowed tools list
-- `PERMISSION_MODE`: Default permission mode
-- `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for /run-async)
+- `PERMISSION_MODE`: Default permission mode (acceptEdits, bypassPermissions, plan)
 - `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
-- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for /run-async)
+- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for /run-async callbacks)
+- `LOG_LEVEL`: Log verbosity (info, debug)
+- `MAX_CONCURRENT_TASKS`: Maximum concurrent tasks (default: 1)
 
 ## Important Implementation Details
 
@@ -192,31 +266,43 @@ SSH keys and environment variables are passed directly in the `/run` request pay
 - Git commands work seamlessly with per-request SSH keys
 - Flexible credential management controlled by the caller
 
-## Async Task Requirements
+## Cloud Run Jobs Architecture Requirements
 
-**For /run-async endpoint to work:**
+**IMPORTANT:** Both `/run` and `/run-async` endpoints now use Cloud Run Jobs. The following setup is **required for all endpoints:**
 
-1. **GCS Bucket Setup:**
-   - Add `GCS_LOGS_BUCKET` to `.env` file
-   - Run `./scripts/setup-project.sh` (safe on existing projects - it's idempotent)
-   - This automatically creates bucket, sets lifecycle policy, grants permissions
-   - Alternative: Manual setup via `gcloud storage buckets create` + `./scripts/setup-service-account.sh` (idempotent)
-   - Example: `your-project-id-claude-logs`
+### 1. GCS Bucket Setup
+- Add `GCS_LOGS_BUCKET=your-project-id-claude-logs` to `.env` file
+- Run `./scripts/setup-project.sh` (safe on existing projects - it's idempotent)
+- This automatically creates bucket, sets lifecycle policy, grants permissions
+- Logs and encrypted payloads stored at: `gs://bucket/sessions/{taskId}/`
 
-2. **Webhook Security Setup:**
-   - Generate a strong secret: `openssl rand -hex 32`
-   - Add `CLOUDRUN_CALLBACK_SECRET` to `.env` file with the generated secret
-   - Run `./scripts/create-secrets.sh` to create the secret in Google Cloud Secret Manager
-   - This secret is used for HMAC-SHA256 webhook authentication
+### 2. Cloud KMS Setup
+- Run `./scripts/setup-kms.sh` to create KMS keyring and key
+- This is required for encrypting task payloads before job execution
+- Updates `.env` with `KMS_KEY_RING`, `KMS_KEY_NAME`, `KMS_LOCATION`
+- Grants API service permission to encrypt/decrypt
 
-3. **Redeploy Service:**
-   - After setting `GCS_LOGS_BUCKET` and `CLOUDRUN_CALLBACK_SECRET`, redeploy: `./scripts/deploy-service.sh`
-   - Service validates bucket configuration and mounts webhook secret on startup
+### 3. Cloud Run Job Deployment
+- Run `./scripts/deploy-job.sh` to create the Cloud Run Job
+- Job uses the same Docker image as the API service
+- Runs `job-worker.ts` entrypoint instead of `server.ts`
+- Updates `.env` with `CLOUDRUN_JOB_NAME`
 
-4. **Lifecycle Policies (Included):**
-   - `setup-project.sh` automatically sets 30-day auto-delete policy
-   - Reduces storage costs
-   - Logs stored at: `gs://bucket/sessions/{taskId}/`
+### 4. IAM Permissions
+- Run `./scripts/grant-job-permissions.sh` to grant necessary permissions
+- API service needs: `run.jobs.run`, `cloudkms.cryptoKeyVersions.useToEncrypt`, `cloudkms.cryptoKeyVersions.useToDecrypt`
+- Job worker needs: `storage.objects.get`, `storage.objects.create`, `cloudkms.cryptoKeyVersions.useToDecrypt`
+
+### 5. Webhook Security (for /run-async only)
+- Generate a strong secret: `openssl rand -hex 32`
+- Add `CLOUDRUN_CALLBACK_SECRET` to `.env` file
+- Run `./scripts/create-secrets.sh` to create the secret in Secret Manager
+- Used for HMAC-SHA256 webhook authentication
+
+### 6. Deploy API Service
+- Run `./scripts/deploy-service.sh` to deploy the API service
+- Service validates all required environment variables on startup
+- Mounts webhook secret from Secret Manager if configured
 
 **Webhook Security:**
 When task completes, the service POSTs to your callback URL with HMAC authentication headers:
@@ -227,6 +313,35 @@ When task completes, the service POSTs to your callback URL with HMAC authentica
 See `docs/async-tasks.md` for detailed setup, usage guide, and webhook signature verification examples.
 
 ## Common Issues
+
+### Missing Required Environment Variables
+If endpoints return errors about missing environment variables:
+1. Ensure `GCS_LOGS_BUCKET` is set in `.env` (required for both /run and /run-async)
+2. Ensure KMS variables are set: `KMS_KEY_RING`, `KMS_KEY_NAME`, `KMS_LOCATION`
+3. Ensure `CLOUDRUN_JOB_NAME` is set
+4. Run `./scripts/setup-kms.sh` if KMS not configured
+5. Run `./scripts/deploy-job.sh` if Cloud Run Job not deployed
+6. Redeploy API service: `./scripts/deploy-service.sh`
+
+### Cloud Run Job Not Found
+If API service returns "Cloud Run Job not found":
+1. Verify job exists: `gcloud run jobs list --region=us-central1`
+2. Check `CLOUDRUN_JOB_NAME` matches deployed job name
+3. Redeploy job: `./scripts/deploy-job.sh`
+4. Ensure job service account has proper permissions: `./scripts/grant-job-permissions.sh`
+
+### KMS Permission Denied
+If you see "Permission denied" errors related to KMS:
+1. Run `./scripts/grant-job-permissions.sh` to grant permissions
+2. Verify KMS key exists: `gcloud kms keys list --location=global --keyring=claude-code`
+3. Check service account has `cloudkms.cryptoKeyVersions.useToEncrypt` and `useToDecrypt` roles
+
+### Job Execution Failures
+If jobs fail to execute or timeout:
+1. Check job logs: `gcloud run jobs executions logs read JOB_EXECUTION_NAME --region=us-central1`
+2. Verify job has enough memory/CPU (configured in deploy-job.sh)
+3. Check encrypted payload exists in GCS
+4. Ensure job timeout is sufficient (default: 60 minutes)
 
 ### Authentication
 All authentication is handled via request payload (`anthropicApiKey` or `anthropicOAuthToken`). The service uses a token proxy to securely inject credentials without exposing them to the Claude CLI process.
@@ -239,13 +354,9 @@ The service supports two prompt delivery methods:
 - Named pipe (default): Better for large prompts, uses mkfifo
 - Direct stdin: Simpler but may have issues with very large prompts
 
-### Async Tasks Not Available
-If `/run-async` returns error about missing `GCS_LOGS_BUCKET`:
-1. Add `GCS_LOGS_BUCKET=your-project-id-claude-logs` to .env
-2. Run `./scripts/setup-project.sh` (handles everything automatically)
-3. Redeploy: `./scripts/deploy-service.sh`
-
-Alternative manual approach:
-- Create bucket: `gcloud storage buckets create gs://bucket-name`
-- Grant permissions: `./scripts/setup-service-account.sh` (idempotent, safe to re-run)
-- Redeploy: `./scripts/deploy-service.sh`
+### Git Operations Fail
+If git commit/push operations fail:
+1. Ensure `.gitconfig` file exists in repository root with user name and email
+2. Verify SSH key is provided in request payload for private repos
+3. Check git operations logs in GCS session logs
+4. Ensure workspace has git changes before commit

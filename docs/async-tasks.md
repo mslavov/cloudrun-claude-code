@@ -68,7 +68,9 @@ This enables:
 
 ## Architecture
 
-### Components
+### Components - Cloud Run Jobs
+
+The service uses **Cloud Run Jobs architecture** for task execution with Cloud KMS encryption:
 
 ```
 ┌─────────────┐
@@ -77,41 +79,56 @@ This enables:
 └──────┬──────┘
        │
        │ POST /run-async
-       │ (prompt, callback URL)
+       │ (prompt, callback URL, postExecutionActions)
        │
        ▼
-┌─────────────────────┐
-│   Cloud Run Service │
-│                     │
-│  ┌──────────────┐  │
-│  │ Task Service │  │
-│  └──────┬───────┘  │
-│         │          │
-│         │ Creates  │
-│         ▼          │
-│  ┌──────────────┐  │
-│  │ GCS Logger   │  │
-│  └──────┬───────┘  │
-│         │          │
-└─────────┼──────────┘
-          │
-          │ Streams logs
-          ▼
+┌──────────────────────┐
+│  API Service (Cloud  │
+│    Run Service)      │
+│                      │
+│ ┌─EncryptionService │
+│ └─ JobTriggerService │
+└──────────┬───────────┘
+           │
+           │ 1. Encrypt payload with KMS
+           │ 2. Store in GCS
+           │ 3. Trigger Cloud Run Job
+           ▼
+┌──────────────────────┐
+│  Job Worker (Cloud   │
+│    Run Job)          │
+│                      │
+│ 1. Read encrypted    │
+│    payload from GCS  │
+│ 2. Decrypt with KMS  │
+│ 3. Execute task      │
+│ 4. Stream logs to GCS│
+│ 5. Post-execution:   │
+│    - Git commit/push │
+│    - File uploads    │
+│ 6. Call webhook      │
+└──────────┬───────────┘
+           │
+           │ Streams logs
+           ▼
     ┌─────────────┐
     │  GCS Bucket │
     │             │
     │  sessions/  │
     │  └─{taskId}/│
-    │    ├─*.jsonl│
-    │    └─meta   │
+    │    ├─encrypted-payload.bin
+    │    ├─*.jsonl (logs)
+    │    ├─uploads/ (files)
+    │    └─metadata.json
     └─────────────┘
-          │
-          │ On completion
-          ▼
+           │
+           │ On completion
+           ▼
     ┌─────────────┐
     │   Webhook   │
     │  (callback  │
     │     URL)    │
+    │  + HMAC auth│
     └─────────────┘
 ```
 
@@ -120,23 +137,33 @@ This enables:
 1. **Task Creation** (`AsyncClaudeController`)
    - Validates request (prompt, callback URL, credentials)
    - Generates or validates task ID
+   - **Encrypts payload with Cloud KMS**
+   - **Stores encrypted payload in GCS**
+   - **Triggers Cloud Run Job execution**
    - Returns 202 Accepted immediately
-   - Starts background execution
 
-2. **Background Execution** (`TaskService`)
-   - Sets up proxy, workspace, git repo
+2. **Job Execution** (`job-worker.ts`)
+   - **Reads encrypted payload from GCS**
+   - **Decrypts with Cloud KMS**
+   - Sets up workspace, clones git repo
    - Executes Claude Code CLI
-   - Streams output to both console and GCS
+   - Streams output to GCS
 
 3. **Log Streaming** (`GCSLoggerService`)
    - Buffers JSONL output (100 lines per chunk)
    - Writes chunks to GCS as files
    - Saves task metadata (status, timestamps, errors)
 
-4. **Callback Notification**
+4. **Post-Execution Actions** (if configured)
+   - **Git operations:** Commit and/or push changes
+   - **File uploads:** Upload files matching glob patterns to GCS
+   - Results included in webhook callback
+
+5. **Callback Notification**
    - On completion/failure, POSTs to callback URL
-   - Includes task ID, status, logs path, summary
-   - Retries not implemented (client should handle)
+   - **Includes HMAC-SHA256 signature for authentication**
+   - Includes task ID, status, logs path, summary, post-execution results
+   - Payload encrypted in transit via HTTPS
 
 ## Setup
 
@@ -330,6 +357,94 @@ Metadata is:
 - Stored with task logs
 - Returned in callback payload
 - Useful for correlation, tracking, debugging
+
+### With Post-Execution Actions
+
+Configure automated git operations and file uploads after task completion:
+
+```bash
+curl -X POST "${SERVICE_URL}/run-async" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer ${AUTH_TOKEN}" \
+  -d '{
+    "prompt": "Run Playwright tests and generate report",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "callbackUrl": "https://your-app.com/webhooks/test-complete",
+    "gitRepo": "git@github.com:your-org/e2e-tests.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "maxTurns": 15,
+    "postExecutionActions": {
+      "git": {
+        "commit": true,
+        "commitMessage": "Update test snapshots",
+        "push": true,
+        "branch": "main"
+      },
+      "uploadFiles": {
+        "glob Patterns": [".playwright/**/*.webm", "*.log", "coverage/**"],
+        "gcsPrefix": "test-artifacts"
+      }
+    },
+    "metadata": {
+      "testRun": "nightly-2025-01-10",
+      "environment": "staging"
+    }
+  }'
+```
+
+**Post-Execution Actions:**
+- **Git operations:** Automatically commit and push changes made by Claude
+- **File uploads:** Upload test artifacts, logs, or generated files to GCS
+- **Behavior:** Only executes if task completes successfully (exit code 0)
+- **Results:** Included in webhook callback payload
+
+**Example callback with post-execution results:**
+
+```json
+{
+  "taskId": "test-run-123",
+  "status": "completed",
+  "exitCode": 0,
+  "logsPath": "gs://bucket/sessions/test-run-123/",
+  "summary": {
+    "durationMs": 180000,
+    "turns": 12,
+    "errors": 0,
+    "startedAt": "2025-01-10T02:00:00.000Z",
+    "completedAt": "2025-01-10T02:03:00.000Z"
+  },
+  "uploadedFiles": [
+    {
+      "originalPath": ".playwright/test-results/video-1.webm",
+      "gcsPath": "gs://bucket/sessions/test-run-123/uploads/test-artifacts/.playwright/test-results/video-1.webm",
+      "sizeBytes": 2457600
+    },
+    {
+      "originalPath": "test-output.log",
+      "gcsPath": "gs://bucket/sessions/test-run-123/uploads/test-artifacts/test-output.log",
+      "sizeBytes": 15234
+    }
+  ],
+  "gitCommit": {
+    "sha": "a1b2c3d4e5f6",
+    "message": "Update test snapshots",
+    "pushed": true,
+    "branch": "main"
+  },
+  "metadata": {
+    "testRun": "nightly-2025-01-10",
+    "environment": "staging"
+  }
+}
+```
+
+**Use Cases:**
+- Automated test runs with artifact upload
+- Code generation with automatic commits
+- Build systems that push generated files
+- CI/CD workflows with result preservation
+
+See [Post-Execution Actions Guide](./post-execution-actions.md) for detailed documentation.
 
 ## Webhook Integration
 

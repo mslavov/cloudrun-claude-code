@@ -11,7 +11,13 @@ Welcome to the comprehensive documentation for the Claude Code Cloud Run service
 
 ### Deployment & Operations
 - **[Deployment Guide](deployment.md)** - Step-by-step Cloud Run deployment
+- **[Cloud Run Jobs Architecture](cloud-run-jobs.md)** - Job-based execution architecture
+- **[KMS Setup Guide](kms-setup.md)** - Cloud KMS encryption configuration
 - **[Project Management](project-management.md)** - Managing secrets and configuration
+
+### Feature Guides
+- **[Async Tasks](async-tasks.md)** - Background task execution with webhooks
+- **[Post-Execution Actions](post-execution-actions.md)** - Automated git operations and file uploads
 
 ### Development
 - **[Claude Configuration](../CLAUDE.md)** - Claude Code guidance and configuration (root)
@@ -22,17 +28,23 @@ Welcome to the comprehensive documentation for the Claude Code Cloud Run service
 ### For First-Time Users
 1. Start with the [README](../README.md) for an overview
 2. Follow the [Deployment Guide](deployment.md) to set up your service
-3. Use the [Testing Guide](testing.md) to verify your installation
+3. Review [Cloud Run Jobs Architecture](cloud-run-jobs.md) to understand the execution model
+4. Configure security with the [KMS Setup Guide](kms-setup.md)
+5. Use the [Testing Guide](testing.md) to verify your installation
 
 ### For Developers
 1. Review [Claude Configuration](../CLAUDE.md) for development guidelines
 2. Check the [API Reference](api-reference.md) for endpoint details
-3. See [Per-Repository SSH Keys](per-repo-ssh-keys.md) for secure git operations
+3. Learn about [Async Tasks](async-tasks.md) for background execution
+4. Configure [Post-Execution Actions](post-execution-actions.md) for automated workflows
+5. See [Per-Repository SSH Keys](per-repo-ssh-keys.md) for secure git operations
 
 ### For Operations Teams
-1. Use [Project Management](project-management.md) for secrets and config
-2. Follow [Deployment Guide](deployment.md) for production setup
-3. Review [Testing Guide](testing.md) for monitoring and validation
+1. Understand [Cloud Run Jobs Architecture](cloud-run-jobs.md) for the execution model
+2. Set up [KMS encryption](kms-setup.md) for credential security
+3. Follow [Deployment Guide](deployment.md) for production setup
+4. Use [Project Management](project-management.md) for secrets and config
+5. Review [Testing Guide](testing.md) for monitoring and validation
 
 ## 📖 Documentation Overview
 
@@ -58,6 +70,36 @@ Comprehensive deployment instructions:
 - Google Cloud configuration
 - Service deployment scripts
 - Cost management and scaling
+
+#### [Cloud Run Jobs Architecture](cloud-run-jobs.md)
+Architecture and implementation of Cloud Run Jobs:
+- Why Cloud Run Jobs vs in-process execution
+- Component architecture and flow diagrams
+- Benefits and trade-offs
+- Monitoring and troubleshooting
+
+#### [KMS Setup Guide](kms-setup.md)
+Cloud Key Management Service configuration:
+- Automated and manual KMS setup
+- Encryption architecture and flow
+- Key management and rotation
+- Security best practices
+
+### Feature Guides
+
+#### [Async Tasks](async-tasks.md)
+Background task execution guide:
+- Async vs sync execution patterns
+- GCS log streaming architecture
+- Webhook callbacks and authentication
+- Use cases and examples
+
+#### [Post-Execution Actions](post-execution-actions.md)
+Automated actions after task completion:
+- Git operations (commit, push)
+- File uploads to GCS
+- Configuration examples
+- CI/CD integration patterns
 
 ### Operational Documentation
 
@@ -116,6 +158,10 @@ cloudrun-claude-code/
 │   ├── index.md            # Documentation index (this file)
 │   ├── api-reference.md   # API documentation
 │   ├── deployment.md      # Deployment guide
+│   ├── cloud-run-jobs.md  # Cloud Run Jobs architecture
+│   ├── kms-setup.md       # KMS setup guide
+│   ├── async-tasks.md     # Async task execution
+│   ├── post-execution-actions.md # Post-execution automation
 │   ├── testing.md         # Testing guide
 │   ├── project-management.md # Project configuration
 │   └── per-repo-ssh-keys.md # SSH key management

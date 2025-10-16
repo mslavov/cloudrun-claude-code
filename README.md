@@ -2,19 +2,25 @@
 
 Production-ready deployment of Claude Code TypeScript SDK as a Cloud Run service with dynamic configuration for system prompts and tool permissions.
 
+**Execution Architecture:** The service uses a **Cloud Run Jobs architecture** where API requests trigger isolated job executions. All task execution happens in Cloud Run Job containers with Cloud KMS encryption for secure credential handling. This architecture provides better resource isolation, improved security, and eliminates CPU-always-allocated billing.
+
 > **Note**: The Claude Code SDK is installed globally in the Docker container following the official Anthropic Docker setup pattern. This improves compatibility and reduces potential conflicts.
 
 ## Features
 
+- ✅ **Cloud Run Jobs Architecture** - All tasks execute in isolated job containers
+- ✅ **Cloud KMS Encryption** - Secure credential handling with encrypted payloads
 - ✅ Claude Code CLI integration (official distribution)
 - ✅ API key authentication
 - ✅ Async task execution with GCS logging
+- ✅ **Post-execution actions** - Automated git commits/pushes and file uploads
+- ✅ **Git operations** - Comprehensive git service with identity configuration
 - ✅ Hot-reloadable system prompts via Secret Manager
 - ✅ Secure VPC egress with firewall rules
 - ✅ Per-request ephemeral workspaces
 - ✅ SSE streaming responses (sync) + GCS logs (async)
 - ✅ Tool permission controls
-- ✅ Webhook callbacks for async tasks
+- ✅ Webhook callbacks for async tasks with HMAC authentication
 
 ## Quick Start
 
@@ -61,12 +67,23 @@ vim .env
 ### 3. Deploy to Cloud Run
 
 ```bash
-# One-time project setup (enables APIs, creates repository, sets IAM)
+# One-time project setup (enables APIs, creates repository, sets IAM, GCS bucket)
 ./scripts/setup-project.sh
 
-# Deploy your service
-./scripts/build-and-push.sh    # Build and push Docker image
-./scripts/deploy-service.sh    # Deploy to Cloud Run
+# Set up Cloud KMS for credential encryption (required for Cloud Run Jobs)
+./scripts/setup-kms.sh
+
+# Build and push Docker image
+./scripts/build-and-push.sh
+
+# Deploy Cloud Run Job (executes tasks in isolated containers)
+./scripts/deploy-job.sh
+
+# Grant IAM permissions for jobs and KMS
+./scripts/grant-job-permissions.sh
+
+# Deploy API service (triggers jobs)
+./scripts/deploy-service.sh
 
 # Set up service account for production (after deployment)
 ./scripts/setup-service-account.sh    # Configure service account (idempotent, safe to re-run)
@@ -75,6 +92,8 @@ vim .env
 # Test the deployment
 ./scripts/test.sh remote
 ```
+
+**Important:** The service now uses Cloud Run Jobs for all task execution. Both `/run` and `/run-async` endpoints require KMS and Cloud Run Job setup.
 
 ## API Usage
 
@@ -199,6 +218,19 @@ curl -X POST https://your-service-url/run-async \
   "metadata": {
     "requestId": "task-123",
     "userId": "user-456"
+  },
+  "uploadedFiles": [  # If postExecutionActions.uploadFiles was configured
+    {
+      "originalPath": "coverage/report.html",
+      "gcsPath": "gs://bucket/sessions/TASK_ID/uploads/coverage/report.html",
+      "sizeBytes": 12345
+    }
+  ],
+  "gitCommit": {  # If postExecutionActions.git was configured
+    "sha": "abc123def456",
+    "message": "Task execution 550e8400...",
+    "pushed": true,
+    "branch": "main"
   }
 }
 
@@ -246,28 +278,42 @@ See `examples/` folder for more request examples.
 | `callbackUrl` | string | Webhook URL for async task completion (required for `/run-async`) | - |
 | `taskId` | string | Custom task ID (auto-generated if not provided, for `/run-async`) | - |
 | `metadata` | object | Custom metadata returned in callback (for `/run-async`) | - |
+| `postExecutionActions` | object | Post-execution actions (git, file uploads) for `/run-async` only | - |
 
 ### Environment Variables
 
-**Service Configuration:**
+**Required (Cloud Run Jobs Architecture):**
+- `GCS_LOGS_BUCKET`: GCS bucket name for task logs and encrypted payloads (required for both /run and /run-async)
+- `KMS_KEY_RING`: Cloud KMS key ring name (created by setup-kms.sh)
+- `KMS_KEY_NAME`: Cloud KMS key name (created by setup-kms.sh)
+- `KMS_LOCATION`: Cloud KMS location (default: global)
+- `CLOUDRUN_JOB_NAME`: Name of the Cloud Run Job (created by deploy-job.sh)
+
+**Optional:**
 - `PORT`: Server port (default: 8080)
 - `ALLOWED_TOOLS`: Comma-separated list of allowed tools
 - `PERMISSION_MODE`: Default permission mode (`acceptEdits`, `bypassPermissions`, `plan`)
-- `GCS_LOGS_BUCKET`: GCS bucket name for async task logs (required for async tasks)
 - `GCS_PROJECT_ID`: Optional GCS project ID (defaults to default credentials)
-- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for async tasks)
+- `CLOUDRUN_CALLBACK_SECRET`: Secret for HMAC webhook authentication (required for /run-async)
+- `LOG_LEVEL`: Log verbosity (info, debug)
+- `MAX_CONCURRENT_TASKS`: Maximum concurrent tasks (default: 1)
 
 **Authentication:**
 - **IMPORTANT**: The service uses a **payload-based authentication model**
 - API keys/OAuth tokens are passed in request payload, **not** as environment variables
 - For local testing, you can optionally set `ANTHROPIC_API_KEY` environment variable
 
-**Async Tasks:**
-- Requires `GCS_LOGS_BUCKET` to be configured
+**Cloud Run Jobs Architecture (Required for All Endpoints):**
+- Both `/run` and `/run-async` now use Cloud Run Jobs for task execution
+- Requires `GCS_LOGS_BUCKET` for logs and encrypted payloads
+- Requires Cloud KMS setup for credential encryption (`./scripts/setup-kms.sh`)
+- Requires Cloud Run Job deployment (`./scripts/deploy-job.sh`)
+- Run `./scripts/grant-job-permissions.sh` to grant IAM permissions
+
+**Async Tasks (Additional Requirements):**
 - Requires `CLOUDRUN_CALLBACK_SECRET` for webhook authentication (generate with `openssl rand -hex 32`)
-- Service account needs `roles/storage.objectAdmin` on the GCS bucket
 - Run `./scripts/create-secrets.sh` to create webhook secret in Secret Manager
-- Run `./scripts/setup-service-account.sh` after setting up the bucket (idempotent, safe to re-run)
+- Service account needs `roles/storage.objectAdmin` on the GCS bucket
 
 **Git Repository Support:**
 - SSH keys are passed in request payload via the `sshKey` parameter
@@ -418,10 +464,14 @@ The Dockerfile installs Claude CLI globally following the official pattern:
 All deployment scripts are in the `scripts/` folder:
 
 - `setup-project.sh` - One-time Google Cloud project setup (APIs, repository, IAM, GCS bucket)
+- `setup-kms.sh` - Set up Cloud KMS for credential encryption (required for Cloud Run Jobs)
+- `build-and-push.sh` - Build and push Docker image to Artifact Registry
+- `deploy-job.sh` - Deploy Cloud Run Job for task execution
+- `grant-job-permissions.sh` - Grant IAM permissions for jobs and KMS
+- `deploy-service.sh` - Deploy API service to Cloud Run
 - `setup-service-account.sh` - Set up service account with permissions (idempotent, safe to re-run)
 - `download-service-account-key.sh` - Download service account key for local testing
-- `build-and-push.sh` - Build and push Docker image to Artifact Registry
-- `deploy-service.sh` - Deploy service to Cloud Run
+- `create-secrets.sh` - Create secrets in Secret Manager (webhook secret)
 - `load-env.sh` - Helper script to load environment variables
 - `project.sh` - Manage multiple GCP projects
 
@@ -437,6 +487,48 @@ All deployment scripts are in the `scripts/` folder:
 
 ## Troubleshooting
 
+### Missing Required Environment Variables
+If endpoints return errors about missing environment variables:
+1. Ensure `GCS_LOGS_BUCKET` is set (required for both /run and /run-async)
+2. Ensure KMS variables are set: `KMS_KEY_RING`, `KMS_KEY_NAME`, `KMS_LOCATION`
+3. Ensure `CLOUDRUN_JOB_NAME` is set
+4. Run `./scripts/setup-kms.sh` if KMS not configured
+5. Run `./scripts/deploy-job.sh` if Cloud Run Job not deployed
+6. Redeploy API service: `./scripts/deploy-service.sh`
+
+### Cloud Run Job Not Found
+If API service returns "Cloud Run Job not found":
+1. Verify job exists: `gcloud run jobs list --region=us-central1`
+2. Check `CLOUDRUN_JOB_NAME` matches deployed job name
+3. Redeploy job: `./scripts/deploy-job.sh`
+4. Ensure job service account has proper permissions: `./scripts/grant-job-permissions.sh`
+
+### KMS Permission Denied
+If you see "Permission denied" errors related to KMS:
+1. Run `./scripts/grant-job-permissions.sh` to grant permissions
+2. Verify KMS key exists: `gcloud kms keys list --location=global --keyring=claude-code`
+3. Check service account has `cloudkms.cryptoKeyVersions.useToEncrypt` and `useToDecrypt` roles
+
+### Job Execution Failures
+If jobs fail to execute or timeout:
+1. Check job logs: `gcloud run jobs executions logs read JOB_EXECUTION_NAME --region=us-central1`
+2. Verify job has enough memory/CPU (configured in deploy-job.sh)
+3. Check encrypted payload exists in GCS
+4. Ensure job timeout is sufficient (default: 60 minutes)
+
+### Authentication Errors
+- Ensure `anthropicApiKey` or `anthropicOAuthToken` is included in the request payload
+- For API keys: Obtain from https://console.anthropic.com/
+- For OAuth tokens: Generate using `claude setup-token` command
+- The service uses payload-based authentication, not environment variables
+
+### Git Operations Fail
+If git commit/push operations fail:
+1. Ensure `.gitconfig` file exists in repository root with user name and email
+2. Verify SSH key is provided in request payload for private repos
+3. Check git operations logs in GCS session logs
+4. Ensure workspace has git changes before commit
+
 ### Known Issues
 
 #### Claude Code SDK hanging in containers
@@ -449,17 +541,6 @@ All deployment scripts are in the `scripts/` folder:
 - Check Cloud Run logs: `gcloud run services logs read qa-agent --region=us-central1`
 - Verify secrets are mounted correctly
 - Check VPC/firewall configuration
-
-### Authentication errors
-- Ensure `anthropicApiKey` or `anthropicOAuthToken` is included in the request payload
-- For API keys: Obtain from https://console.anthropic.com/
-- For OAuth tokens: Generate using `claude setup-token` command
-- The service uses payload-based authentication, not environment variables
-
-### Tool execution failures
-- Verify tool permissions in ALLOWED_TOOLS
-- Check permission mode settings
-- Review container logs for specific errors
 
 ## License
 

@@ -1,6 +1,8 @@
 # Deployment Guide
 
-This guide walks you through deploying Claude Code to Google Cloud Run.
+This guide walks you through deploying Claude Code to Google Cloud Run with Cloud Run Jobs architecture.
+
+**Architecture:** The service uses Cloud Run Jobs for task execution with Cloud KMS encryption for secure credential handling. API requests trigger isolated job executions instead of running tasks in-process.
 
 ## Prerequisites
 
@@ -69,15 +71,69 @@ The setup script handles all Google Cloud configuration automatically:
 ./scripts/setup-project.sh
 ```
 
-### 5. Deploy the Service
+### 5. Set Up Cloud KMS
+
+Cloud KMS is required for encrypting task payloads before job execution:
+
+```bash
+# Set up Cloud KMS keyring and key
+./scripts/setup-kms.sh
+
+# This will:
+# - Enable Cloud KMS API
+# - Create KMS keyring: claude-code
+# - Create KMS key: payload-encryption
+# - Grant encrypt/decrypt permissions to service account
+# - Update .env with KMS configuration
+```
+
+### 6. Build and Push Docker Image
 
 ```bash
 # Build and push Docker image to Artifact Registry
 ./scripts/build-and-push.sh
 
-# Deploy to Cloud Run (with authentication required)
+# This creates the container image used by both API service and Cloud Run Job
+```
+
+### 7. Deploy Cloud Run Job
+
+The Cloud Run Job executes tasks in isolated containers:
+
+```bash
+# Deploy Cloud Run Job
+./scripts/deploy-job.sh
+
+# This will:
+# - Create Cloud Run Job: claude-code-job
+# - Configure job to run job-worker.ts entrypoint
+# - Set memory, CPU, and timeout configuration
+# - Update .env with CLOUDRUN_JOB_NAME
+```
+
+### 8. Grant IAM Permissions
+
+```bash
+# Grant permissions for jobs and KMS
+./scripts/grant-job-permissions.sh
+
+# This grants:
+# - API service: run.jobs.run, cloudkms.cryptoKeyVersions.useToEncrypt/useToDecrypt
+# - Job worker: storage.objects.get/create, cloudkms.cryptoKeyVersions.useToDecrypt
+```
+
+### 9. Deploy API Service
+
+```bash
+# Deploy API service to Cloud Run (with authentication required)
 ./scripts/deploy-service.sh
 
+# This creates the API service that triggers Cloud Run Jobs
+```
+
+### 10. Set Up Service Account for Client Authentication
+
+```bash
 # Set up service account for client authentication (idempotent, safe to re-run)
 ./scripts/setup-service-account.sh
 
@@ -85,73 +141,33 @@ The setup script handles all Google Cloud configuration automatically:
 ./scripts/download-service-account-key.sh
 ```
 
-The deployment script will output your service URL. Note: The service now requires authentication.
+The deployment scripts will output your service URL. Note: The service requires authentication.
 
-### 6. (Optional) Set Up Async Task Support
+### 11. (Optional) Set Up Async Task Webhooks
 
-If you need async task execution with background processing, set up a GCS bucket for logs and webhook authentication.
+If you need async task execution with webhook callbacks, configure webhook authentication:
 
-**Option A: Let setup-project.sh handle it (recommended for new projects)**
+**Note:** The GCS bucket (set up in Step 4) is already configured for both /run and /run-async endpoints. This step only sets up webhook authentication for /run-async callbacks.
 
 ```bash
-# 1. Add async configuration to your .env file
-echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
-
 # Generate webhook authentication secret
 WEBHOOK_SECRET=$(openssl rand -hex 32)
 echo "CLOUDRUN_CALLBACK_SECRET=$WEBHOOK_SECRET" >> .env
 
-# 2. Run setup script (safe to run on existing projects - it's idempotent)
-./scripts/setup-project.sh
-
-# This will:
-# - Enable storage API
-# - Create GCS bucket
-# - Set lifecycle policy (30-day auto-delete)
-# - Grant storage permissions to service account
-
-# 3. Create webhook secret in Secret Manager
+# Create webhook secret in Secret Manager
 ./scripts/create-secrets.sh
 
 # This will:
 # - Enable Secret Manager API if needed
 # - Create CLOUDRUN_CALLBACK_SECRET for webhook authentication
 
-# 4. Redeploy with updated environment variables and secrets
-./scripts/deploy-service.sh
-```
-
-**Option B: Manual setup**
-
-```bash
-# 1. Add async configuration to your .env file
-echo "GCS_LOGS_BUCKET=your-project-id-claude-logs" >> .env
-
-# Generate webhook authentication secret
-WEBHOOK_SECRET=$(openssl rand -hex 32)
-echo "CLOUDRUN_CALLBACK_SECRET=$WEBHOOK_SECRET" >> .env
-
-# 2. Create the GCS bucket
-gcloud storage buckets create gs://your-project-id-claude-logs \
-  --project=${PROJECT_ID} \
-  --location=${REGION} \
-  --uniform-bucket-level-access
-
-# 3. Create webhook secret in Secret Manager
-./scripts/create-secrets.sh
-
-# 4. Grant storage permissions to service account
-./scripts/setup-service-account.sh
-
-# 5. Redeploy with updated environment variables and secrets
+# Redeploy with updated environment variables and secrets
 ./scripts/deploy-service.sh
 ```
 
 **What this enables:**
-- `/run-async` endpoint for background task execution
-- JSONL logs streamed to GCS
-- HMAC-authenticated webhook callbacks when tasks complete
-- Better handling of long-running tasks (up to Cloud Run's 60-minute limit)
+- `/run-async` endpoint with webhook callbacks when tasks complete
+- HMAC-authenticated webhook callbacks for secure task completion notifications
 
 **Storage costs:**
 - GCS storage: ~$0.023/GB/month (standard storage in us-central1)
@@ -175,14 +191,14 @@ gcloud storage buckets update gs://your-project-id-claude-logs \
   --lifecycle-file=lifecycle.json
 ```
 
-### 7. Test the Deployment
+### 12. Test the Deployment
 
 #### Using gcloud authentication (for developers)
 ```bash
 # Test the synchronous /run endpoint
 ./scripts/test.sh remote
 
-# Test async task execution (requires GCS_LOGS_BUCKET setup)
+# Test async task execution
 ./scripts/test.sh remote-async
 
 # Run all tests
@@ -208,25 +224,41 @@ The deployment creates:
 1. **Artifact Registry:**
    - Docker repository for your container images
    - Located at: `{region}-docker.pkg.dev/{project-id}/claude-code`
+   - Single image used by both API service and Cloud Run Job
 
-2. **Cloud Run Service:**
-   - Fully managed serverless container
-   - Auto-scaling from 0 to max instances
+2. **Cloud KMS:**
+   - Key ring: `claude-code`
+   - Encryption key: `payload-encryption`
+   - Used to encrypt task payloads before job execution
+   - Automatic key rotation available
+
+3. **Cloud Run Service (API Service):**
+   - Triggers Cloud Run Job executions
+   - Streams logs via SSE for sync requests
+   - Returns immediately for async requests
    - HTTPS endpoint with authentication
-   - CONCURRENCY=1 for maximum security isolation
+   - No CPU-always-allocated needed (jobs handle execution)
 
-3. **GCS Bucket (Optional - for async tasks):**
-   - Stores JSONL logs from async task execution
-   - Requires `roles/storage.objectAdmin` permission
+4. **Cloud Run Job:**
+   - Executes tasks in isolated containers
+   - Runs `job-worker.ts` entrypoint
+   - Reads encrypted payloads from GCS
+   - Decrypts using Cloud KMS
+   - Streams output to GCS
+   - Executes post-execution actions (git, file uploads)
+
+5. **GCS Bucket:**
+   - Stores task logs and encrypted payloads
    - Located at: `gs://{bucket-name}/sessions/{task-id}/`
-   - Lifecycle policies recommended for cost management
+   - Lifecycle policies (30-day auto-delete)
+   - Required for both `/run` and `/run-async` endpoints
 
-4. **Secret Manager (Optional - for async tasks):**
+6. **Secret Manager (Optional - for async webhooks):**
    - Stores `CLOUDRUN_CALLBACK_SECRET` for webhook HMAC authentication
    - Mounted to Cloud Run service as environment variable
    - Used to sign webhook callbacks to your application
 
-**Note**: API keys, OAuth tokens, and SSH keys are passed in request payloads (not stored as secrets), while the webhook callback secret is stored in Secret Manager for service-side signing.
+**Note**: API keys, OAuth tokens, and SSH keys are passed in request payloads (not stored as secrets). Task payloads are encrypted with KMS before storage and decrypted in job workers.
 
 ## Configuration Details
 
@@ -288,10 +320,42 @@ gcloud run services describe {service-name} --region={region} --format="value(st
 
 ## Troubleshooting
 
+### Missing Required Environment Variables
+If endpoints return errors about missing environment variables:
+1. Ensure `GCS_LOGS_BUCKET` is set (required for both /run and /run-async)
+2. Ensure KMS variables are set: `KMS_KEY_RING`, `KMS_KEY_NAME`, `KMS_LOCATION`
+3. Ensure `CLOUDRUN_JOB_NAME` is set
+4. Run `./scripts/setup-kms.sh` if KMS not configured
+5. Run `./scripts/deploy-job.sh` if Cloud Run Job not deployed
+6. Redeploy API service: `./scripts/deploy-service.sh`
+
+### Cloud Run Job Not Found
+If API service returns "Cloud Run Job not found":
+1. Verify job exists: `gcloud run jobs list --region=us-central1`
+2. Check `CLOUDRUN_JOB_NAME` matches deployed job name in .env
+3. Redeploy job: `./scripts/deploy-job.sh`
+4. Ensure job service account has proper permissions: `./scripts/grant-job-permissions.sh`
+
+### KMS Permission Denied
+If you see "Permission denied" errors related to KMS:
+1. Run `./scripts/grant-job-permissions.sh` to grant permissions
+2. Verify KMS key exists: `gcloud kms keys list --location=global --keyring=claude-code`
+3. Check service account has `cloudkms.cryptoKeyVersions.useToEncrypt` and `useToDecrypt` roles
+4. Re-run setup if needed: `./scripts/setup-kms.sh`
+
+### Job Execution Failures
+If jobs fail to execute or timeout:
+1. Check job logs: `gcloud run jobs executions logs read JOB_EXECUTION_NAME --region=us-central1`
+2. List job executions: `gcloud run jobs executions list CLOUDRUN_JOB_NAME --region=us-central1`
+3. Verify job has enough memory/CPU (configured in deploy-job.sh)
+4. Check encrypted payload exists in GCS
+5. Ensure job timeout is sufficient (default: 60 minutes)
+
 ### Deployment Fails
 
 1. **API not enabled error:**
    - Run `./scripts/setup-project.sh` to enable all APIs
+   - Run `./scripts/setup-kms.sh` to enable KMS API
 
 2. **Permission denied on secrets:**
    - The setup script should handle this, but you can manually grant:
@@ -315,13 +379,19 @@ gcloud run services describe {service-name} --region={region} --format="value(st
    gcloud run services logs read {service-name} --region={region}
    ```
 
-2. Verify you have an Anthropic API key to include in requests:
+2. Check job logs:
+   ```bash
+   gcloud run jobs executions list {job-name} --region={region} --limit=5
+   gcloud run jobs executions logs read {execution-name} --region={region}
+   ```
+
+3. Verify you have an Anthropic API key to include in requests:
    ```bash
    # API keys are passed in request payload, not environment variables
    echo "anthropicApiKey: sk-ant-..."
    ```
 
-3. Test with minimal request:
+4. Test with minimal request:
    ```bash
    ./scripts/test.sh remote
    ```

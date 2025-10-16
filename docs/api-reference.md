@@ -201,6 +201,45 @@ All parameters from `/run` endpoint plus:
 
 All other parameters (prompt, anthropicApiKey, etc.) work the same as `/run` endpoint.
 
+**Post-Execution Actions (optional):**
+
+Configure automated actions after task completion:
+
+```json
+{
+  "postExecutionActions": {
+    "git": {
+      "commit": true,
+      "commitMessage": "Task execution completed",
+      "push": true,
+      "branch": "main",
+      "files": ["src/**", "tests/**"]
+    },
+    "uploadFiles": {
+      "globPatterns": ["*.log", ".playwright/**/*.webm", "coverage/**"],
+      "gcsPrefix": "artifacts"
+    }
+  }
+}
+```
+
+**Git Actions:**
+- `commit` (boolean): Create a git commit after task completion
+- `commitMessage` (string, optional): Custom commit message (default: auto-generated)
+- `push` (boolean): Push commit to remote repository
+- `branch` (string, optional): Branch to push to (default: "main")
+- `files` (string[], optional): Specific files to commit (default: all changes)
+
+**File Upload Actions:**
+- `globPatterns` (string[]): Glob patterns for files to upload to GCS
+- `gcsPrefix` (string, optional): Optional prefix in GCS bucket path
+
+**Behavior:**
+- Git identity read from `.gitconfig` in repository root or uses defaults
+- Only executes if task completes successfully (exit code 0)
+- Results included in webhook callback payload
+- Failures logged but don't fail the task
+
 #### Response (202 Accepted)
 
 ```json

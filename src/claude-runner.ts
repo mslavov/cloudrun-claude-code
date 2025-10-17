@@ -36,6 +36,7 @@ export class ClaudeRunner {
   private process?: ChildProcess;
   private pipePath: string;
   private promptPath: string;
+  private lineBuffer = ""; // Buffer for incomplete lines from stdout
 
   constructor(private workspaceRoot: string) {
     this.pipePath = path.join(workspaceRoot, "claude_prompt_pipe");
@@ -171,11 +172,20 @@ export class ClaudeRunner {
       const text = data.toString();
       output += text;
 
-      // Process line by line for JSON streaming
-      const lines = text.split("\n");
+      // Add to buffer
+      this.lineBuffer += text;
+
+      // Process complete lines (those ending with \n)
+      const lines = this.lineBuffer.split("\n");
+
+      // Last element is incomplete (or empty if ended with \n)
+      this.lineBuffer = lines.pop() || "";
+
+      // Process all complete lines
       lines.forEach((line: string) => {
-        if (line.trim() === "") return;
-        onData(line);
+        if (line.trim() !== "") {
+          onData(line);
+        }
       });
     });
 
@@ -216,6 +226,12 @@ export class ClaudeRunner {
         if (!resolved) {
           clearTimeout(timeoutId);
           resolved = true;
+
+          // Flush any remaining buffered line
+          if (this.lineBuffer.trim() !== "") {
+            onData(this.lineBuffer);
+            this.lineBuffer = "";
+          }
 
           // Clean up processes
           try {
@@ -301,11 +317,20 @@ export class ClaudeRunner {
       const text = data.toString();
       output += text;
 
-      // Process line by line for JSON streaming
-      const lines = text.split("\n");
+      // Add to buffer
+      this.lineBuffer += text;
+
+      // Process complete lines (those ending with \n)
+      const lines = this.lineBuffer.split("\n");
+
+      // Last element is incomplete (or empty if ended with \n)
+      this.lineBuffer = lines.pop() || "";
+
+      // Process all complete lines
       lines.forEach((line: string) => {
-        if (line.trim() === "") return;
-        onData(line);
+        if (line.trim() !== "") {
+          onData(line);
+        }
       });
     });
 
@@ -337,6 +362,13 @@ export class ClaudeRunner {
         if (!resolved) {
           clearTimeout(timeoutId);
           resolved = true;
+
+          // Flush any remaining buffered line
+          if (this.lineBuffer.trim() !== "") {
+            onData(this.lineBuffer);
+            this.lineBuffer = "";
+          }
+
           resolve({
             exitCode: code || 0,
             output,
@@ -366,6 +398,10 @@ export class ClaudeRunner {
   kill(): void {
     if (this.process) {
       logger.info('Killing Claude process (SIGTERM)');
+
+      // Clear line buffer on kill
+      this.lineBuffer = "";
+
       try {
         this.process.kill("SIGTERM");
       } catch (e: any) {

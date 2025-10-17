@@ -39,6 +39,13 @@ export interface AsyncRunRequest extends RunRequest {
 
       /** Specific files to commit (optional, defaults to all changes) */
       files?: string[];
+
+      /**
+       * How to handle conflicts when pushing (default: 'auto')
+       * - "auto": Automatically recover from conflicts (agent's changes win)
+       * - "fail": Fail explicitly on conflicts
+       */
+      conflictStrategy?: "auto" | "fail";
     };
 
     /**
@@ -147,6 +154,18 @@ export interface AsyncTaskResult {
 
     /** Branch that was pushed to */
     branch?: string;
+
+    /** Recovery details (only present if push recovery was needed) */
+    recovery?: {
+      /** Recovery method used */
+      method: "rebase" | "force-with-lease";
+
+      /** Remote SHA that was on server before recovery */
+      remoteSha: string;
+
+      /** Files that had conflicts (if any) */
+      conflictFiles?: string[];
+    };
   };
 }
 

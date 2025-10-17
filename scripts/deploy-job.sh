@@ -67,8 +67,8 @@ gcloud run jobs ${CMD} "${JOB_NAME}" \
   --region="${LOCATION}" \
   --project="${PROJECT_ID}" \
   --max-retries=1 \
-  --task-timeout=1h \
-  --cpu=2 \
+  --task-timeout=24h \
+  --cpu=1 \
   --memory=4Gi \
   --service-account="${SERVICE_SA}" \
   --set-env-vars="PROJECT_ID=${PROJECT_ID}" \

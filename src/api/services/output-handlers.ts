@@ -147,6 +147,7 @@ export class GCSOutputHandler implements OutputHandler {
         push: boolean;
         branch?: string;
         files?: string[];
+        conflictStrategy?: "auto" | "fail";
       };
       uploadFiles?: {
         globPatterns: string[];
@@ -240,7 +241,17 @@ export class GCSOutputHandler implements OutputHandler {
 
     // Execute post-execution actions (if requested and task succeeded)
     let uploadedFiles: Array<{ originalPath: string; gcsPath: string; sizeBytes: number }> | undefined;
-    let gitCommit: { sha: string; message: string; pushed: boolean; branch?: string } | undefined;
+    let gitCommit: {
+      sha: string;
+      message: string;
+      pushed: boolean;
+      branch?: string;
+      recovery?: {
+        method: "rebase" | "force-with-lease";
+        remoteSha: string;
+        conflictFiles?: string[];
+      };
+    } | undefined;
 
     if (result.exitCode === 0 && this.postExecutionActions && this.workspaceRoot) {
       // Upload files if requested
@@ -296,18 +307,30 @@ export class GCSOutputHandler implements OutputHandler {
             // Push if requested
             if (this.postExecutionActions.git.push) {
               const branch = this.postExecutionActions.git.branch || 'main';
-              logger.info(`[TASK ${this.taskId}] Pushing commit to remote branch: ${branch}`);
+              const conflictStrategy = this.postExecutionActions.git.conflictStrategy || 'auto';
 
-              await gitService.push(
+              logger.info(`[TASK ${this.taskId}] Pushing commit to remote branch: ${branch} (conflictStrategy: ${conflictStrategy})`);
+
+              const pushResult = await gitService.push(
                 this.workspaceRoot,
                 branch,
                 this.sshKeyPath,
-                false
+                conflictStrategy
               );
 
-              gitCommit.pushed = true;
+              gitCommit.pushed = pushResult.success;
               gitCommit.branch = branch;
-              logger.info(`[TASK ${this.taskId}] ✓ Successfully pushed changes to ${branch}`);
+
+              // Add recovery information if present
+              if (pushResult.recovery) {
+                gitCommit.recovery = pushResult.recovery;
+                logger.info(`[TASK ${this.taskId}] ✓ Push completed with ${pushResult.recovery.method} recovery`);
+                if (pushResult.recovery.conflictFiles && pushResult.recovery.conflictFiles.length > 0) {
+                  logger.info(`[TASK ${this.taskId}] Conflict files: ${pushResult.recovery.conflictFiles.join(', ')}`);
+                }
+              } else {
+                logger.info(`[TASK ${this.taskId}] ✓ Successfully pushed changes to ${branch}`);
+              }
             }
           } else if (!hasChanges) {
             logger.info(`[TASK ${this.taskId}] No git changes detected - skipping commit`);

@@ -236,13 +236,12 @@ export class GitService {
   }
 
   /**
-   * Push commits to remote repository
+   * Fetch from remote repository
    */
-  async push(
+  async fetch(
     workspacePath: string,
     branch: string = 'main',
-    sshKeyPath?: string,
-    force: boolean = false
+    sshKeyPath?: string
   ): Promise<void> {
     try {
       const git = simpleGit(workspacePath);
@@ -252,19 +251,281 @@ export class GitService {
         git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
       }
 
-      logger.debug(`Pushing to remote (branch: ${branch}, force: ${force})`);
+      logger.debug(`Fetching from remote (branch: ${branch})`);
 
-      const pushOptions = force ? ['--force'] : [];
+      await git.fetch('origin', branch);
+
+      logger.debug('✓ Fetch completed successfully');
+    } catch (error: any) {
+      logger.error('Failed to fetch from remote:', error.message);
+      throw new Error(`Failed to fetch: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get remote HEAD SHA for a branch
+   */
+  async getRemoteHead(
+    workspacePath: string,
+    branch: string = 'main'
+  ): Promise<string> {
+    try {
+      const git = simpleGit(workspacePath);
+      const result = await git.raw(['rev-parse', `origin/${branch}`]);
+      return result.trim();
+    } catch (error: any) {
+      logger.error('Failed to get remote HEAD:', error.message);
+      throw new Error(`Failed to get remote HEAD: ${error.message}`);
+    }
+  }
+
+  /**
+   * Get local HEAD SHA
+   */
+  async getLocalHead(workspacePath: string): Promise<string> {
+    try {
+      const git = simpleGit(workspacePath);
+      const result = await git.raw(['rev-parse', 'HEAD']);
+      return result.trim();
+    } catch (error: any) {
+      logger.error('Failed to get local HEAD:', error.message);
+      throw new Error(`Failed to get local HEAD: ${error.message}`);
+    }
+  }
+
+  /**
+   * Check if repository is a shallow clone
+   */
+  async isShallow(workspacePath: string): Promise<boolean> {
+    try {
+      const shallowFile = path.join(workspacePath, '.git', 'shallow');
+      return fs.existsSync(shallowFile);
+    } catch (error: any) {
+      logger.error('Failed to check if shallow:', error.message);
+      return false;
+    }
+  }
+
+  /**
+   * Convert shallow clone to full clone
+   */
+  async unshallow(
+    workspacePath: string,
+    sshKeyPath?: string
+  ): Promise<void> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      // Configure SSH key if provided
+      if (sshKeyPath) {
+        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      logger.debug('Converting shallow clone to full clone');
+
+      await git.fetch(['--unshallow']);
+
+      logger.debug('✓ Repository unshallowed successfully');
+    } catch (error: any) {
+      logger.error('Failed to unshallow repository:', error.message);
+      throw new Error(`Failed to unshallow: ${error.message}`);
+    }
+  }
+
+  /**
+   * Rebase onto remote branch with conflict resolution strategy
+   */
+  async rebaseWithStrategy(
+    workspacePath: string,
+    branch: string = 'main',
+    strategy: 'ours' | 'theirs' = 'ours'
+  ): Promise<{ success: boolean; conflictFiles?: string[] }> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      logger.debug(`Rebasing onto origin/${branch} with strategy: ${strategy}`);
+
+      try {
+        // Attempt rebase with conflict resolution strategy
+        await git.raw(['rebase', `origin/${branch}`, '-X', strategy]);
+
+        logger.debug('✓ Rebase completed successfully');
+        return { success: true };
+      } catch (rebaseError: any) {
+        // Check if there are conflicts
+        const status = await git.status();
+        const conflictFiles = status.conflicted;
+
+        if (conflictFiles.length > 0) {
+          logger.warn(`Rebase failed with ${conflictFiles.length} conflicted files:`, conflictFiles);
+
+          // Abort the rebase to clean up
+          try {
+            await git.rebase(['--abort']);
+          } catch (abortError) {
+            logger.error('Failed to abort rebase:', abortError);
+          }
+
+          return { success: false, conflictFiles };
+        }
+
+        throw rebaseError;
+      }
+    } catch (error: any) {
+      logger.error('Failed to rebase:', error.message);
+      throw new Error(`Failed to rebase: ${error.message}`);
+    }
+  }
+
+  /**
+   * Push with --force-with-lease (safer force push)
+   */
+  async pushWithLease(
+    workspacePath: string,
+    branch: string = 'main',
+    sshKeyPath?: string
+  ): Promise<void> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      // Configure SSH key if provided
+      if (sshKeyPath) {
+        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      logger.debug(`Force pushing with --force-with-lease to ${branch}`);
 
       // Push with timeout
-      const pushPromise = git.push('origin', branch, pushOptions);
+      const pushPromise = git.push('origin', branch, ['--force-with-lease']);
       const timeoutPromise = new Promise((_, reject) => {
         setTimeout(() => reject(new Error('Git push operation timed out after 30 seconds')), 30000);
       });
 
       await Promise.race([pushPromise, timeoutPromise]);
 
-      logger.debug('✓ Push completed successfully');
+      logger.debug('✓ Force push with lease completed successfully');
+    } catch (error: any) {
+      logger.error('Failed to force push with lease:', error.message);
+      throw new Error(`Failed to force push with lease: ${error.message}`);
+    }
+  }
+
+  /**
+   * Push commits to remote repository with automatic conflict recovery
+   */
+  async push(
+    workspacePath: string,
+    branch: string = 'main',
+    sshKeyPath?: string,
+    conflictStrategy: "auto" | "fail" = "auto"
+  ): Promise<{
+    success: boolean;
+    recovery?: {
+      method: "rebase" | "force-with-lease";
+      remoteSha: string;
+      conflictFiles?: string[];
+    };
+  }> {
+    try {
+      const git = simpleGit(workspacePath);
+
+      // Configure SSH key if provided
+      if (sshKeyPath) {
+        git.env('GIT_SSH_COMMAND', `ssh -i ${sshKeyPath} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null`);
+      }
+
+      logger.debug(`Pushing to remote (branch: ${branch}, conflictStrategy: ${conflictStrategy})`);
+
+      // Attempt normal push first
+      try {
+        const pushPromise = git.push('origin', branch);
+        const timeoutPromise = new Promise<never>((_, reject) => {
+          setTimeout(() => reject(new Error('Git push operation timed out after 30 seconds')), 30000);
+        });
+
+        await Promise.race([pushPromise, timeoutPromise]);
+
+        logger.debug('✓ Push completed successfully (no conflicts)');
+        return { success: true };
+      } catch (pushError: any) {
+        // Check if push was rejected due to non-fast-forward
+        const isRejected = pushError.message.includes('rejected') ||
+                          pushError.message.includes('non-fast-forward') ||
+                          pushError.message.includes('Updates were rejected');
+
+        if (!isRejected) {
+          // Not a conflict - re-throw the error
+          throw pushError;
+        }
+
+        logger.warn('Push rejected - remote has diverged from local');
+
+        // If strategy is "fail", throw error immediately
+        if (conflictStrategy === "fail") {
+          throw new Error('Push rejected. Remote has changes that are not in local branch. Use conflictStrategy: "auto" to enable automatic recovery.');
+        }
+
+        // Strategy is "auto" - attempt recovery
+        logger.info('Attempting automatic recovery (agent changes will take priority)');
+
+        // 1. Fetch remote changes
+        logger.debug('Fetching remote changes');
+        await this.fetch(workspacePath, branch, sshKeyPath);
+
+        // 2. Get remote SHA before recovery
+        const remoteSha = await this.getRemoteHead(workspacePath, branch);
+        logger.debug(`Remote HEAD: ${remoteSha}`);
+
+        // 3. Check if repository is shallow - if so, unshallow for rebase
+        const shallow = await this.isShallow(workspacePath);
+        if (shallow) {
+          logger.debug('Repository is shallow - unshallowing for rebase');
+          await this.unshallow(workspacePath, sshKeyPath);
+        }
+
+        // 4. Attempt rebase with "ours" strategy (agent changes win)
+        logger.info('Attempting rebase with conflict resolution (agent changes win)');
+        const rebaseResult = await this.rebaseWithStrategy(workspacePath, branch, 'ours');
+
+        if (rebaseResult.success) {
+          // Rebase succeeded - push normally
+          logger.info('✓ Rebase successful - pushing rebased commits');
+
+          const pushPromise = git.push('origin', branch);
+          const timeoutPromise = new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error('Git push operation timed out after 30 seconds')), 30000);
+          });
+
+          await Promise.race([pushPromise, timeoutPromise]);
+
+          logger.info('✓ Push completed successfully after rebase recovery');
+
+          return {
+            success: true,
+            recovery: {
+              method: 'rebase',
+              remoteSha,
+              conflictFiles: rebaseResult.conflictFiles
+            }
+          };
+        } else {
+          // Rebase failed with conflicts - use force-with-lease as fallback
+          logger.warn(`Rebase failed with conflicts in ${rebaseResult.conflictFiles?.length || 0} files - falling back to force-with-lease`);
+
+          await this.pushWithLease(workspacePath, branch, sshKeyPath);
+
+          logger.info('✓ Push completed successfully with force-with-lease recovery');
+
+          return {
+            success: true,
+            recovery: {
+              method: 'force-with-lease',
+              remoteSha,
+              conflictFiles: rebaseResult.conflictFiles
+            }
+          };
+        }
+      }
     } catch (error: any) {
       logger.error('Failed to push changes:', error.message);
 
@@ -274,8 +535,6 @@ export class GitService {
         errorMessage = 'Authentication failed. Ensure SSH key has write access to the repository.';
       } else if (error.message.includes('Permission denied')) {
         errorMessage = 'SSH key authentication failed or insufficient permissions.';
-      } else if (error.message.includes('rejected')) {
-        errorMessage = 'Push rejected. Remote has changes that are not in local branch. Consider fetching first.';
       }
 
       throw new Error(`Failed to push: ${errorMessage}`);
@@ -293,10 +552,19 @@ export class GitService {
       files?: string[];
       branch?: string;
       sshKeyPath?: string;
-      force?: boolean;
+      conflictStrategy?: "auto" | "fail";
     } = {}
-  ): Promise<{ sha: string; message: string; pushed: boolean }> {
-    const { files, branch = 'main', sshKeyPath, force = false } = options;
+  ): Promise<{
+    sha: string;
+    message: string;
+    pushed: boolean;
+    recovery?: {
+      method: "rebase" | "force-with-lease";
+      remoteSha: string;
+      conflictFiles?: string[];
+    };
+  }> {
+    const { files, branch = 'main', sshKeyPath, conflictStrategy = 'auto' } = options;
 
     // Check if there are changes
     const hasChanges = await this.hasChanges(workspacePath);
@@ -308,12 +576,13 @@ export class GitService {
     // Commit
     const commitResult = await this.commit(workspacePath, message, files, sshKeyPath);
 
-    // Push
-    await this.push(workspacePath, branch, sshKeyPath, force);
+    // Push with conflict strategy
+    const pushResult = await this.push(workspacePath, branch, sshKeyPath, conflictStrategy);
 
     return {
       ...commitResult,
-      pushed: true
+      pushed: pushResult.success,
+      recovery: pushResult.recovery
     };
   }
 }

@@ -46,10 +46,16 @@ RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/s
 # This approach matches the GitHub Action implementation and simplifies version management
 RUN npm install -g @anthropic-ai/claude-code
 
-# Install Playwright and MCP server globally
+# Install Playwright browser with system dependencies
+# Step 1: Install system dependencies automatically (ensures all OS-level deps are present)
+RUN npx -y playwright-core install-deps chromium
+
+# Step 2: Install browser binaries (--no-shell prevents spawning shells in Docker)
+RUN npx -y playwright-core install --no-shell chromium
+
+# Install MCP servers globally
 # This prevents re-downloading packages at runtime for faster MCP startup
-RUN npm install -g @playwright/test @playwright/mcp && \
-    npx playwright install chromium --with-deps
+RUN npm install -g @playwright/mcp @notionhq/notion-mcp-server simple-slack-mcp-server
 
 # Set up environment
 ENV NODE_ENV=production

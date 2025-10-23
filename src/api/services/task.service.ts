@@ -3,6 +3,7 @@ import crypto from "crypto";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "./git.service.js";
 import { WorkspaceService } from "./workspace.service.js";
+import { ClaudeConfigService } from "./claude-config.service.js";
 import { SimpleAnthropicProxy } from "./simple-proxy.js";
 import { OutputHandler } from "./output-handlers.js";
 import { RunRequest } from "../types/request.types.js";
@@ -17,10 +18,12 @@ import { logger } from "../../utils/logger.js";
 export class TaskService {
   private gitService: GitService;
   private workspaceService: WorkspaceService;
+  private claudeConfigService: ClaudeConfigService;
 
   constructor() {
     this.gitService = new GitService();
     this.workspaceService = new WorkspaceService();
+    this.claudeConfigService = new ClaudeConfigService();
   }
 
   /**
@@ -55,12 +58,9 @@ export class TaskService {
       );
       proxy = proxyInstance;
 
-      // Setup workspace (create, SSH keys, git clone)
-      const { workspaceRoot: workspace, sshKeyPath } = await this.setupWorkspace(
-        request.gitRepo,
-        request.sshKey,
-        request.gitBranch,
-        request.gitDepth,
+      // Setup workspace (create, SSH keys, git clone, config files)
+      const { workspaceRoot: workspace, sshKeyPath, configFiles } = await this.setupWorkspace(
+        request,
         logPrefix
       );
       workspaceRoot = workspace;
@@ -70,7 +70,7 @@ export class TaskService {
 
       // Set workspace details on output handler (for post-execution actions)
       if (outputHandler && 'setWorkspaceDetails' in outputHandler) {
-        (outputHandler as any).setWorkspaceDetails(workspaceRoot, sshKeyPath);
+        (outputHandler as any).setWorkspaceDetails(workspaceRoot, sshKeyPath, configFiles);
       }
 
       // Setup environment (secrets, proxy config, SSH)
@@ -186,15 +186,13 @@ export class TaskService {
   }
 
   /**
-   * Setup workspace: create, write SSH keys, clone git repo
+   * Setup workspace: create, write SSH keys, clone git repo, write config files
    */
   private async setupWorkspace(
-    gitRepo?: string,
-    sshKey?: string,
-    gitBranch: string = 'main',
-    gitDepth: number = 1,
+    request: RunRequest,
     logPrefix: string = ''
-  ): Promise<{ workspaceRoot: string; sshKeyPath?: string }> {
+  ): Promise<{ workspaceRoot: string; sshKeyPath?: string; configFiles?: string[] }> {
+    const { gitRepo, sshKey, gitBranch = 'main', gitDepth = 1 } = request;
     // Create workspace
     let workspaceRoot = await this.workspaceService.createWorkspace();
     logger.debug(`${logPrefix} Workspace created: ${workspaceRoot}`);
@@ -249,7 +247,29 @@ export class TaskService {
       logger.debug(`${logPrefix} Repository cloned to: ${workspaceRoot}`);
     }
 
-    return { workspaceRoot, sshKeyPath };
+    // Write Claude configuration files if provided
+    let configFiles: string[] | undefined;
+    if (request.mcpConfig || request.slashCommands || request.subagents) {
+      logger.debug(`${logPrefix} Writing Claude configuration files`);
+      const configResult = await this.claudeConfigService.writeConfigFiles(
+        workspaceRoot,
+        request.mcpConfig,
+        request.slashCommands,
+        request.subagents,
+        request.environmentSecrets
+      );
+      configFiles = configResult.createdFiles;
+      logger.info(`${logPrefix} ✓ Created MCP config: ${configResult.summary.mcpConfigCreated}, ${configResult.summary.slashCommandsCount} slash commands, ${configResult.summary.subagentsCount} subagents`);
+    }
+
+    // Add prompt.txt to excluded files (created by claude-runner)
+    if (configFiles) {
+      configFiles.push('prompt.txt');
+    } else {
+      configFiles = ['prompt.txt'];
+    }
+
+    return { workspaceRoot, sshKeyPath, configFiles };
   }
 
   /**

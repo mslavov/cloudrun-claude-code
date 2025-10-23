@@ -183,6 +183,26 @@ export class GitService {
   }
 
   /**
+   * Get list of changed files (modified, added, deleted, untracked)
+   */
+  async getChangedFiles(workspacePath: string): Promise<string[]> {
+    try {
+      const git = simpleGit(workspacePath);
+      const status = await git.status();
+
+      // Return all file paths that have changes
+      const changedFiles = status.files.map(file => file.path);
+
+      logger.debug(`Found ${changedFiles.length} changed files`);
+
+      return changedFiles;
+    } catch (error: any) {
+      logger.error('Failed to get changed files:', error.message);
+      throw new Error(`Failed to get changed files: ${error.message}`);
+    }
+  }
+
+  /**
    * Commit changes in workspace
    * Optionally specify files to commit (defaults to all changes)
    */

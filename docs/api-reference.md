@@ -134,7 +134,101 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `gitDepth` | number | No | 1 | Clone depth for shallow cloning |
 | `environmentSecrets` | object | No | {} | Environment variables to inject as key-value pairs |
 | `sshKey` | string | No | - | SSH private key for git authentication (PEM format) |
+| `mcpConfig` | object | No | - | Raw .mcp.json content for MCP servers (see Enhanced Configuration below) |
+| `slashCommands` | object | No | - | Custom slash commands with frontmatter and content (see Enhanced Configuration below) |
+| `subagents` | object | No | - | Custom subagents with frontmatter and content (see Enhanced Configuration below) |
 | `metadata` | object | No | - | Optional metadata for logging/tracking |
+
+#### Enhanced Configuration (MCP Servers, Slash Commands, Subagents)
+
+The service supports dynamic per-request configuration of MCP servers, custom slash commands, and subagents. These configurations are written to the workspace before Claude Code execution and **automatically excluded from git commits** when using post-execution actions.
+
+**MCP Servers (`mcpConfig`):**
+
+Pass raw `.mcp.json` content - no transformation needed. Environment variables are expanded from `environmentSecrets` using `${VAR}` syntax, and the service validates that referenced variables are defined (with warnings for undefined ones).
+
+```json
+{
+  "mcpConfig": {
+    "mcpServers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      },
+      "postgres": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+        "env": {
+          "DATABASE_URL": "${DATABASE_URL}"
+        }
+      }
+    }
+  }
+}
+```
+
+Creates `.mcp.json` in workspace root. Supports stdio, HTTP, and SSE transports.
+
+**Slash Commands (`slashCommands`):**
+
+Define custom commands with generic frontmatter and content. Completely flexible - add any frontmatter fields supported by Claude Code.
+
+```json
+{
+  "slashCommands": {
+    "deploy-staging": {
+      "frontmatter": {
+        "description": "Deploy to staging environment",
+        "allowed-tools": "Bash",
+        "model": "sonnet"
+      },
+      "content": "Deploy to staging:\n1. Run tests\n2. Build\n3. Deploy to GCP"
+    },
+    "review-pr": {
+      "frontmatter": {
+        "description": "Comprehensive PR review",
+        "argument-hint": "[pr-number]"
+      },
+      "content": "Review PR #$1:\n- Code quality\n- Security\n- Performance"
+    }
+  }
+}
+```
+
+Creates `.claude/commands/{name}.md` files. Supports arguments via `$1`, `$2`, or `$ARGUMENTS`.
+
+**Subagents (`subagents`):**
+
+Define specialized AI agents with generic frontmatter and content. Name and description typically required for automatic invocation.
+
+```json
+{
+  "subagents": {
+    "security-auditor": {
+      "frontmatter": {
+        "name": "security-auditor",
+        "description": "Security expert for code audits",
+        "tools": "Read, Grep, Bash(npm audit:*)",
+        "model": "opus"
+      },
+      "content": "You are a security expert...\n\nYour responsibilities:\n- Security audits\n- Vulnerability detection"
+    }
+  }
+}
+```
+
+Creates `.claude/agents/{name}.md` files. Frontmatter accepts any valid Claude Code subagent fields.
+
+**Git Commit Exclusion:**
+
+When `postExecutionActions.git.commit` is configured without explicit `files` list, dynamically created config files (.mcp.json, .claude/commands/, .claude/agents/) are **automatically excluded** from commits. Only actual code changes made by Claude are committed.
+
+**Override Behavior:**
+
+Payload configurations take precedence over repository files during execution but won't be committed to the repository.
 
 #### SSH Key and Environment Variables
 
@@ -690,6 +784,62 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
     }
   }'
 ```
+
+### With Enhanced Configuration (MCP + Slash Commands + Subagents)
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Use /security-scan to audit the codebase, then deploy to staging",
+    "gitRepo": "git@github.com:myorg/backend.git",
+    "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+    "environmentSecrets": {
+      "GITHUB_TOKEN": "ghp_...",
+      "DATABASE_URL": "postgres://..."
+    },
+    "mcpConfig": {
+      "mcpServers": {
+        "github": {
+          "command": "npx",
+          "args": ["-y", "@modelcontextprotocol/server-github"],
+          "env": {
+            "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+          }
+        }
+      }
+    },
+    "slashCommands": {
+      "security-scan": {
+        "frontmatter": {
+          "description": "Run comprehensive security audit",
+          "allowed-tools": "Read, Grep, Bash",
+          "model": "opus"
+        },
+        "content": "Perform security audit:\n1. Run npm audit\n2. Check for vulnerabilities\n3. Review auth logic\n4. Generate report"
+      }
+    },
+    "subagents": {
+      "security-expert": {
+        "frontmatter": {
+          "name": "security-expert",
+          "description": "Security expert for vulnerability analysis",
+          "tools": "Read, Grep, Bash(npm audit:*)",
+          "model": "opus"
+        },
+        "content": "You are a security expert. Focus on OWASP Top 10 vulnerabilities and provide actionable recommendations."
+      }
+    },
+    "maxTurns": 20
+  }'
+```
+
+This example demonstrates:
+- MCP server configuration (GitHub)
+- Custom slash command (/security-scan)
+- Specialized subagent (security-expert)
+- All configs automatically excluded from git commits
 
 ### Complete Example with All Options
 

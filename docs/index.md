@@ -101,6 +101,14 @@ Automated actions after task completion:
 - Configuration examples
 - CI/CD integration patterns
 
+#### [Enhanced Configuration](api-reference.md#enhanced-configuration-mcp-servers-slash-commands-subagents)
+Dynamic MCP servers, slash commands, and subagents configuration:
+- Per-request MCP server configuration
+- Custom slash commands with flexible frontmatter
+- Specialized subagents for domain expertise
+- Automatic git exclusion for config files
+- Examples and best practices
+
 ### Operational Documentation
 
 #### [Testing Guide](testing.md)

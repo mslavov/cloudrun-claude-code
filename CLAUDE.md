@@ -144,7 +144,9 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `allowedTools`: List of allowed tools
 - `disallowedTools`: List of tools to block
 - `permissionMode`: Permission mode (acceptEdits, bypassPermissions, plan)
-- `mcpConfigJson`: MCP server configuration object
+- `mcpConfig`: MCP server configuration object (see Enhanced Configuration below)
+- `slashCommands`: Custom slash commands configuration (see Enhanced Configuration below)
+- `subagents`: Custom subagents configuration (see Enhanced Configuration below)
 - `maxTurns`: Maximum conversation turns (default: 6)
 - `model`: Specific Claude model to use
 - `fallbackModel`: Fallback model if primary fails
@@ -186,6 +188,103 @@ When configured:
 - Files matching glob patterns uploaded to task's GCS session path
 - Results included in webhook callback (`gitCommit` and `uploadedFiles` fields)
 - Git identity read from `.gitconfig` file in repository or uses defaults
+- **Dynamic config files (.mcp.json, .claude/commands/, .claude/agents/) are automatically excluded from commits**
+
+### Enhanced Configuration (MCP Servers, Slash Commands, Subagents)
+
+The service supports payload-based configuration of MCP servers, custom slash commands, and subagents. These are written to the workspace before Claude Code execution and automatically excluded from git commits.
+
+**MCP Servers (`mcpConfig`):**
+```json
+{
+  "mcpConfig": {
+    "mcpServers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      },
+      "postgres": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+        "env": {
+          "DATABASE_URL": "${DATABASE_URL}"
+        }
+      }
+    }
+  }
+}
+```
+
+- Accepts raw `.mcp.json` format - just pass the exact JSON you'd put in `.mcp.json`
+- Environment variables expanded from `environmentSecrets` using `${VAR}` syntax
+- No transformation needed - what you send is what gets written
+
+**Slash Commands (`slashCommands`):**
+```json
+{
+  "slashCommands": {
+    "deploy-staging": {
+      "frontmatter": {
+        "description": "Deploy to staging environment",
+        "allowed-tools": "Bash",
+        "model": "sonnet"
+      },
+      "content": "Deploy to staging:\n1. Run tests\n2. Build\n3. Deploy to GCP"
+    },
+    "review-pr": {
+      "frontmatter": {
+        "description": "Comprehensive PR review",
+        "argument-hint": "[pr-number]"
+      },
+      "content": "Review PR #$1:\n- Code quality\n- Security\n- Performance"
+    }
+  }
+}
+```
+
+- Creates `.claude/commands/{name}.md` files with YAML frontmatter
+- Frontmatter accepts any valid Claude Code slash command fields
+- Supports arguments via `$1`, `$2`, or `$ARGUMENTS`
+- Flexible structure - add any frontmatter fields you need
+
+**Subagents (`subagents`):**
+```json
+{
+  "subagents": {
+    "security-auditor": {
+      "frontmatter": {
+        "name": "security-auditor",
+        "description": "Security expert for auditing code",
+        "tools": "Read, Grep, Bash(npm audit:*)",
+        "model": "opus"
+      },
+      "content": "You are a security expert..."
+    },
+    "deployment-specialist": {
+      "frontmatter": {
+        "name": "deployment-specialist",
+        "description": "Deployment and DevOps expert",
+        "tools": "Bash, Read, Write"
+      },
+      "content": "You are a DevOps specialist..."
+    }
+  }
+}
+```
+
+- Creates `.claude/agents/{name}.md` files with YAML frontmatter
+- Frontmatter accepts any valid Claude Code subagent fields
+- Name and description typically required for automatic invocation
+- Flexible structure - add any frontmatter fields you need
+
+**Git Commit Exclusion:**
+When `postExecutionActions.git.commit` is configured without explicit `files` list, dynamically created config files are automatically excluded from commits. Only actual code changes made by Claude are committed.
+
+**Override Behavior:**
+If repository already contains `.mcp.json`, `.claude/commands/`, or `.claude/agents/`, payload configurations take precedence during execution but won't be committed.
 
 ### Environment Variables
 

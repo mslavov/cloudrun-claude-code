@@ -1,0 +1,82 @@
+{
+  "prompt": "Review the latest code changes, audit for security issues, and deploy to staging",
+  "gitRepo": "git@github.com:myorg/myrepo.git",
+  "gitBranch": "main",
+  "sshKey": "-----BEGIN OPENSSH PRIVATE KEY-----\n...\n-----END OPENSSH PRIVATE KEY-----",
+  "environmentSecrets": {
+    "GITHUB_TOKEN": "ghp_xxxxxxxxxxxxxxxxxxxx",
+    "DATABASE_URL": "postgres://user:pass@host/db"
+  },
+  "mcpConfig": {
+    "mcpServers": {
+      "github": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-github"],
+        "env": {
+          "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+        }
+      },
+      "postgres": {
+        "command": "npx",
+        "args": ["-y", "@modelcontextprotocol/server-postgres"],
+        "env": {
+          "DATABASE_URL": "${DATABASE_URL}"
+        }
+      }
+    }
+  },
+  "slashCommands": {
+    "deploy-staging": {
+      "frontmatter": {
+        "description": "Deploy to staging environment",
+        "allowed-tools": "Bash",
+        "model": "sonnet"
+      },
+      "content": "Deploy the application to staging environment:\n1. Run all tests (npm test)\n2. Build the application (npm run build)\n3. Deploy to GCP Cloud Run staging\n4. Run smoke tests\n5. Report deployment status"
+    },
+    "review-pr": {
+      "frontmatter": {
+        "description": "Comprehensive PR review",
+        "argument-hint": "[pr-number]",
+        "allowed-tools": "Read, Grep, Bash(gh:*)"
+      },
+      "content": "Review PR #$1 and provide comprehensive feedback:\n- Code quality assessment\n- Security concerns\n- Performance implications\n- Suggestions for improvement\n- Test coverage analysis"
+    },
+    "security-scan": {
+      "frontmatter": {
+        "description": "Security audit and vulnerability scan",
+        "allowed-tools": "Read, Grep, Bash",
+        "model": "opus"
+      },
+      "content": "Perform a comprehensive security audit:\n1. Run npm audit\n2. Check for common vulnerabilities\n3. Review authentication logic\n4. Check for secret exposure\n5. Generate security report"
+    }
+  },
+  "subagents": {
+    "security-auditor": {
+      "frontmatter": {
+        "name": "security-auditor",
+        "description": "Security expert for auditing code and identifying vulnerabilities",
+        "tools": "Read, Grep, Bash(npm audit:*)",
+        "model": "opus"
+      },
+      "content": "You are a senior security expert specializing in web application security.\n\nYour responsibilities:\n- Identify security vulnerabilities in code (XSS, SQL injection, CSRF, etc.)\n- Review authentication and authorization logic\n- Check for sensitive data exposure (API keys, passwords, tokens)\n- Validate input sanitization and output encoding\n- Review third-party dependencies for known vulnerabilities\n- Assess cryptographic implementations\n\nProvide specific, actionable recommendations with code examples where appropriate.\nPrioritize findings by severity (Critical, High, Medium, Low)."
+    },
+    "deployment-specialist": {
+      "frontmatter": {
+        "name": "deployment-specialist",
+        "description": "Deployment and DevOps expert for GCP Cloud Run deployments",
+        "tools": "Bash, Read, Write, Grep",
+        "model": "sonnet"
+      },
+      "content": "You are a senior DevOps specialist with expertise in GCP Cloud Run deployments.\n\nYour responsibilities:\n- Deploy applications to Cloud Run with zero downtime\n- Configure service settings (CPU, memory, concurrency, timeout)\n- Manage environment variables and secrets\n- Configure IAM permissions and service accounts\n- Monitor deployments and analyze logs\n- Troubleshoot deployment issues\n- Implement rollback strategies\n\nFollow best practices for Cloud Run deployments:\n- Use tagged images for reproducibility\n- Configure health checks\n- Set appropriate resource limits\n- Use Secret Manager for sensitive data"
+    },
+    "test-engineer": {
+      "frontmatter": {
+        "name": "test-engineer",
+        "description": "QA engineer for writing and running tests",
+        "tools": "Read, Write, Bash, Grep"
+      },
+      "content": "You are a QA engineer specializing in automated testing.\n\nYour responsibilities:\n- Write comprehensive unit tests\n- Create integration tests\n- Implement end-to-end tests\n- Review test coverage\n- Identify edge cases\n- Debug test failures\n\nUse appropriate testing frameworks and follow testing best practices."
+    }
+  }
+}

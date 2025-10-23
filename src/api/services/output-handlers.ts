@@ -132,10 +132,11 @@ export class GCSOutputHandler implements OutputHandler {
   private turnCount = 0;
   private errorCount = 0;
   private startedAt: string;
+  private configFiles?: string[]; // Track dynamically created config files for git exclusion
 
   constructor(
     private taskId: string,
-    private callbackUrl: string,
+    private callbackUrl: string | undefined,
     private gcsLogger: GCSLoggerService,
     private metadata?: Record<string, any>,
     private workspaceRoot?: string,
@@ -157,32 +158,39 @@ export class GCSOutputHandler implements OutputHandler {
   ) {
     this.startedAt = new Date().toISOString();
     this.taskLogger = gcsLogger.createTaskLogger(taskId);
-    logger.debug(`[TASK ${taskId}] GCS output handler initialized`);
+    logger.debug(`[TASK ${taskId}] GCS output handler initialized (mode: ${callbackUrl ? 'async' : 'sync'})`);
 
-    // Save initial metadata
-    const initialMetadata: AsyncTaskMetadata = {
-      taskId,
-      status: 'running',
-      callbackUrl,
-      createdAt: this.startedAt,
-      startedAt: this.startedAt,
-      metadata: this.metadata
-    };
+    // Save initial metadata (only for async tasks with callback URL)
+    if (callbackUrl) {
+      const initialMetadata: AsyncTaskMetadata = {
+        taskId,
+        status: 'running',
+        callbackUrl,
+        createdAt: this.startedAt,
+        startedAt: this.startedAt,
+        metadata: this.metadata
+      };
 
-    this.gcsLogger.saveMetadata(taskId, initialMetadata)
-      .catch(error => {
-        logger.error(`[TASK ${taskId}] Failed to save initial metadata:`, error.message);
-      });
+      this.gcsLogger.saveMetadata(taskId, initialMetadata)
+        .catch(error => {
+          logger.error(`[TASK ${taskId}] Failed to save initial metadata:`, error.message);
+        });
+    }
   }
 
   /**
    * Set workspace details for post-execution actions
    * Called after workspace is created in TaskService
    */
-  setWorkspaceDetails(workspaceRoot: string, sshKeyPath?: string): void {
+  setWorkspaceDetails(workspaceRoot: string, sshKeyPath?: string, configFiles?: string[]): void {
     this.workspaceRoot = workspaceRoot;
     this.sshKeyPath = sshKeyPath;
-    logger.debug(`[TASK ${this.taskId}] Workspace details set for post-execution actions`);
+    this.configFiles = configFiles;
+    if (configFiles && configFiles.length > 0) {
+      logger.debug(`[TASK ${this.taskId}] Workspace details set for post-execution actions (${configFiles.length} config files to exclude from commits)`);
+    } else {
+      logger.debug(`[TASK ${this.taskId}] Workspace details set for post-execution actions`);
+    }
   }
 
   onData(line: string): void {
@@ -221,22 +229,24 @@ export class GCSOutputHandler implements OutputHandler {
 
     const completedAt = new Date().toISOString();
 
-    // Save final metadata
-    const finalMetadata: AsyncTaskMetadata = {
-      taskId: this.taskId,
-      status: result.exitCode === 0 ? 'completed' : 'failed',
-      callbackUrl: this.callbackUrl,
-      createdAt: this.startedAt,
-      startedAt: this.startedAt,
-      completedAt,
-      error: result.error,
-      metadata: this.metadata
-    };
+    // Save final metadata (only for async tasks with callback URL)
+    if (this.callbackUrl) {
+      const finalMetadata: AsyncTaskMetadata = {
+        taskId: this.taskId,
+        status: result.exitCode === 0 ? 'completed' : 'failed',
+        callbackUrl: this.callbackUrl,
+        createdAt: this.startedAt,
+        startedAt: this.startedAt,
+        completedAt,
+        error: result.error,
+        metadata: this.metadata
+      };
 
-    try {
-      await this.gcsLogger.saveMetadata(this.taskId, finalMetadata);
-    } catch (error: any) {
-      logger.error(`[TASK ${this.taskId}] Failed to save final metadata:`, error.message);
+      try {
+        await this.gcsLogger.saveMetadata(this.taskId, finalMetadata);
+      } catch (error: any) {
+        logger.error(`[TASK ${this.taskId}] Failed to save final metadata:`, error.message);
+      }
     }
 
     // Execute post-execution actions (if requested and task succeeded)
@@ -289,47 +299,68 @@ export class GCSOutputHandler implements OutputHandler {
 
             logger.debug(`[TASK ${this.taskId}] Commit message: ${commitMessage.split('\n')[0]}...`);
 
-            const commitResult = await gitService.commit(
-              this.workspaceRoot,
-              commitMessage,
-              this.postExecutionActions.git.files,
-              this.sshKeyPath
-            );
+            // Determine which files to commit
+            let filesToCommit = this.postExecutionActions.git.files;
 
-            logger.info(`[TASK ${this.taskId}] ✓ Commit created: ${commitResult.sha.substring(0, 7)}`);
+            // If no explicit files list and we have config files to exclude
+            if (!filesToCommit && this.configFiles && this.configFiles.length > 0) {
+              // Get all changed files and exclude config files
+              const allChangedFiles = await gitService.getChangedFiles(this.workspaceRoot);
+              filesToCommit = allChangedFiles.filter(file => !this.configFiles!.includes(file));
 
-            gitCommit = {
-              sha: commitResult.sha,
-              message: commitResult.message,
-              pushed: false
-            };
+              if (filesToCommit.length === 0) {
+                logger.info(`[TASK ${this.taskId}] All changes are in config files - skipping commit`);
+                filesToCommit = undefined; // Reset to skip commit
+              } else {
+                logger.info(`[TASK ${this.taskId}] Excluding ${this.configFiles.length} config files from commit (committing ${filesToCommit.length} files)`);
+                logger.debug(`[TASK ${this.taskId}] Excluded files: ${this.configFiles.join(', ')}`);
+              }
+            }
 
-            // Push if requested
-            if (this.postExecutionActions.git.push) {
-              const branch = this.postExecutionActions.git.branch || 'main';
-              const conflictStrategy = this.postExecutionActions.git.conflictStrategy || 'auto';
-
-              logger.info(`[TASK ${this.taskId}] Pushing commit to remote branch: ${branch} (conflictStrategy: ${conflictStrategy})`);
-
-              const pushResult = await gitService.push(
+            // Only commit if we have files to commit
+            if (filesToCommit !== undefined || !this.configFiles || this.configFiles.length === 0) {
+              const commitResult = await gitService.commit(
                 this.workspaceRoot,
-                branch,
-                this.sshKeyPath,
-                conflictStrategy
+                commitMessage,
+                filesToCommit,
+                this.sshKeyPath
               );
 
-              gitCommit.pushed = pushResult.success;
-              gitCommit.branch = branch;
+              logger.info(`[TASK ${this.taskId}] ✓ Commit created: ${commitResult.sha.substring(0, 7)}`);
 
-              // Add recovery information if present
-              if (pushResult.recovery) {
-                gitCommit.recovery = pushResult.recovery;
-                logger.info(`[TASK ${this.taskId}] ✓ Push completed with ${pushResult.recovery.method} recovery`);
-                if (pushResult.recovery.conflictFiles && pushResult.recovery.conflictFiles.length > 0) {
-                  logger.info(`[TASK ${this.taskId}] Conflict files: ${pushResult.recovery.conflictFiles.join(', ')}`);
+              gitCommit = {
+                sha: commitResult.sha,
+                message: commitResult.message,
+                pushed: false
+              };
+
+              // Push if requested
+              if (this.postExecutionActions.git.push) {
+                const branch = this.postExecutionActions.git.branch || 'main';
+                const conflictStrategy = this.postExecutionActions.git.conflictStrategy || 'auto';
+
+                logger.info(`[TASK ${this.taskId}] Pushing commit to remote branch: ${branch} (conflictStrategy: ${conflictStrategy})`);
+
+                const pushResult = await gitService.push(
+                  this.workspaceRoot,
+                  branch,
+                  this.sshKeyPath,
+                  conflictStrategy
+                );
+
+                gitCommit.pushed = pushResult.success;
+                gitCommit.branch = branch;
+
+                // Add recovery information if present
+                if (pushResult.recovery) {
+                  gitCommit.recovery = pushResult.recovery;
+                  logger.info(`[TASK ${this.taskId}] ✓ Push completed with ${pushResult.recovery.method} recovery`);
+                  if (pushResult.recovery.conflictFiles && pushResult.recovery.conflictFiles.length > 0) {
+                    logger.info(`[TASK ${this.taskId}] Conflict files: ${pushResult.recovery.conflictFiles.join(', ')}`);
+                  }
+                } else {
+                  logger.info(`[TASK ${this.taskId}] ✓ Successfully pushed changes to ${branch}`);
                 }
-              } else {
-                logger.info(`[TASK ${this.taskId}] ✓ Successfully pushed changes to ${branch}`);
               }
             }
           } else if (!hasChanges) {
@@ -343,27 +374,30 @@ export class GCSOutputHandler implements OutputHandler {
       }
     }
 
-    // Prepare callback payload
-    const callbackPayload: AsyncTaskResult = {
-      taskId: this.taskId,
-      status: result.exitCode === 0 ? 'completed' : 'failed',
-      exitCode: result.exitCode,
-      logsPath: this.gcsLogger.getLogsPath(this.taskId),
-      summary: {
-        durationMs,
-        turns: this.turnCount > 0 ? this.turnCount : undefined,
-        errors: this.errorCount > 0 ? this.errorCount : undefined,
-        startedAt: this.startedAt,
-        completedAt
-      },
-      error: result.error,
-      metadata: this.metadata,
-      uploadedFiles,
-      gitCommit
-    };
+    // Call webhook (only for async tasks with callback URL)
+    if (this.callbackUrl) {
+      // Prepare callback payload
+      const callbackPayload: AsyncTaskResult = {
+        taskId: this.taskId,
+        status: result.exitCode === 0 ? 'completed' : 'failed',
+        exitCode: result.exitCode,
+        logsPath: this.gcsLogger.getLogsPath(this.taskId),
+        summary: {
+          durationMs,
+          turns: this.turnCount > 0 ? this.turnCount : undefined,
+          errors: this.errorCount > 0 ? this.errorCount : undefined,
+          startedAt: this.startedAt,
+          completedAt
+        },
+        error: result.error,
+        metadata: this.metadata,
+        uploadedFiles,
+        gitCommit
+      };
 
-    // Call webhook
-    await this.callWebhook(callbackPayload);
+      // Call webhook
+      await this.callWebhook(callbackPayload);
+    }
 
     logger.info(`[TASK ${this.taskId}] Task completed successfully in ${durationMs}ms`);
   }
@@ -373,45 +407,47 @@ export class GCSOutputHandler implements OutputHandler {
 
     const cancelledAt = new Date().toISOString();
 
-    // Save cancellation metadata
-    const cancelMetadata: AsyncTaskMetadata = {
-      taskId: this.taskId,
-      status: 'cancelled',
-      callbackUrl: this.callbackUrl,
-      createdAt: this.startedAt,
-      startedAt: this.startedAt,
-      completedAt: cancelledAt,
-      cancelledAt,
-      error: 'Task cancelled by user',
-      metadata: this.metadata
-    };
-
-    try {
-      await this.gcsLogger.saveMetadata(this.taskId, cancelMetadata);
-    } catch (error: any) {
-      logger.error(`[TASK ${this.taskId}] Failed to save cancellation metadata:`, error.message);
-    }
-
-    // Prepare callback payload
-    const callbackPayload: AsyncTaskResult = {
-      taskId: this.taskId,
-      status: 'cancelled',
-      exitCode: 130, // Standard exit code for SIGTERM (cancelled)
-      logsPath: this.gcsLogger.getLogsPath(this.taskId),
-      summary: {
-        durationMs,
-        turns: this.turnCount > 0 ? this.turnCount : undefined,
-        errors: this.errorCount > 0 ? this.errorCount : undefined,
+    // Save cancellation metadata (only for async tasks with callback URL)
+    if (this.callbackUrl) {
+      const cancelMetadata: AsyncTaskMetadata = {
+        taskId: this.taskId,
+        status: 'cancelled',
+        callbackUrl: this.callbackUrl,
+        createdAt: this.startedAt,
         startedAt: this.startedAt,
         completedAt: cancelledAt,
-        cancelledAt
-      },
-      error: 'Task cancelled by user',
-      metadata: this.metadata
-    };
+        cancelledAt,
+        error: 'Task cancelled by user',
+        metadata: this.metadata
+      };
 
-    // Call webhook
-    await this.callWebhook(callbackPayload);
+      try {
+        await this.gcsLogger.saveMetadata(this.taskId, cancelMetadata);
+      } catch (error: any) {
+        logger.error(`[TASK ${this.taskId}] Failed to save cancellation metadata:`, error.message);
+      }
+
+      // Prepare callback payload
+      const callbackPayload: AsyncTaskResult = {
+        taskId: this.taskId,
+        status: 'cancelled',
+        exitCode: 130, // Standard exit code for SIGTERM (cancelled)
+        logsPath: this.gcsLogger.getLogsPath(this.taskId),
+        summary: {
+          durationMs,
+          turns: this.turnCount > 0 ? this.turnCount : undefined,
+          errors: this.errorCount > 0 ? this.errorCount : undefined,
+          startedAt: this.startedAt,
+          completedAt: cancelledAt,
+          cancelledAt
+        },
+        error: 'Task cancelled by user',
+        metadata: this.metadata
+      };
+
+      // Call webhook
+      await this.callWebhook(callbackPayload);
+    }
 
     logger.info(`[TASK ${this.taskId}] Task cancellation handled in ${durationMs}ms`);
   }
@@ -432,6 +468,12 @@ export class GCSOutputHandler implements OutputHandler {
   }
 
   private async callWebhook(payload: AsyncTaskResult): Promise<void> {
+    // This method should only be called when callbackUrl is defined
+    if (!this.callbackUrl) {
+      logger.warn(`[TASK ${this.taskId}] callWebhook called but no callbackUrl defined`);
+      return;
+    }
+
     logger.info(`[TASK ${this.taskId}] Calling webhook: ${this.callbackUrl}`);
 
     try {

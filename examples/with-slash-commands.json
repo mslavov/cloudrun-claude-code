@@ -1,0 +1,31 @@
+{
+  "prompt": "Use /deploy-staging to deploy the application",
+  "gitRepo": "https://github.com/myorg/myrepo.git",
+  "slashCommands": {
+    "deploy-staging": {
+      "frontmatter": {
+        "description": "Deploy to staging",
+        "allowed-tools": "Bash, Read",
+        "model": "sonnet"
+      },
+      "content": "Deploy the application to staging environment:\n1. Run tests: npm test\n2. Build: npm run build\n3. Deploy to GCP Cloud Run staging\n4. Run smoke tests\n5. Report status"
+    },
+    "deploy-production": {
+      "frontmatter": {
+        "description": "Deploy to production",
+        "allowed-tools": "Bash, Read",
+        "model": "sonnet",
+        "argument-hint": "[version]"
+      },
+      "content": "Deploy the application to production:\n1. Verify tests pass\n2. Build production bundle\n3. Deploy to GCP Cloud Run production\n4. Run health checks\n5. Monitor for errors"
+    },
+    "run-tests": {
+      "frontmatter": {
+        "description": "Run all tests with coverage",
+        "allowed-tools": "Bash",
+        "model": "haiku"
+      },
+      "content": "Run the test suite:\n1. Unit tests: npm run test:unit\n2. Integration tests: npm run test:integration\n3. E2E tests: npm run test:e2e\n4. Generate coverage report"
+    }
+  }
+}

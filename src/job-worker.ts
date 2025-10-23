@@ -52,18 +52,19 @@ async function main() {
     const payload = await encryptionService.decryptPayload(encryptedData);
     logger.info(`[TASK ${taskId}] Payload decrypted successfully`);
 
-    // 3. Extract callback URL from decrypted payload
+    // 3. Extract callback URL from decrypted payload (optional for sync mode)
     const callbackUrl = payload.callbackUrl;
-    if (!callbackUrl) {
-      throw new Error('Decrypted payload missing callbackUrl');
+    const isAsync = !!callbackUrl;
+    logger.info(`[TASK ${taskId}] Execution mode: ${isAsync ? 'async (webhook callback)' : 'sync (GCS logs only)'}`);
+    if (callbackUrl) {
+      logger.debug(`[TASK ${taskId}] Callback URL: ${callbackUrl}`);
     }
-    logger.debug(`[TASK ${taskId}] Callback URL: ${callbackUrl}`);
 
-    // 4. Create output handler (will stream to GCS and call webhook on completion)
+    // 4. Create output handler (will stream to GCS and optionally call webhook on completion)
     logger.info(`[TASK ${taskId}] Creating GCS output handler`);
     const outputHandler = new GCSOutputHandler(
       taskId,
-      callbackUrl,
+      callbackUrl, // undefined for sync mode
       gcsLogger,
       payload.metadata,
       undefined, // workspaceRoot - will be set by taskService after workspace creation

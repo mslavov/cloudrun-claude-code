@@ -1,3 +1,5 @@
+import { SlashCommandConfig, SubagentConfig } from './claude-config.types.js';
+
 export interface RunRequest {
   prompt: string;
   anthropicApiKey?: string; // User's Anthropic API key
@@ -19,4 +21,7 @@ export interface RunRequest {
   environmentSecrets?: Record<string, string>;
   sshKey?: string;
   metadata?: Record<string, any>;
+  mcpConfig?: Record<string, any>; // Raw .mcp.json content
+  slashCommands?: Record<string, SlashCommandConfig>;
+  subagents?: Record<string, SubagentConfig>;
 }

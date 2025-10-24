@@ -23,6 +23,12 @@ Cloud Key Management Service (KMS) is used to encrypt task payloads before stora
 - Git repository URLs
 - Full task configuration
 
+**Encryption Method:** This service uses **envelope encryption** to handle large payloads (exceeding KMS's 64KB limit):
+1. A random Data Encryption Key (DEK) is generated for each payload
+2. The DEK is encrypted using Cloud KMS
+3. The payload is encrypted using the DEK with AES-256-GCM
+4. Both the encrypted DEK and encrypted payload are stored together
+
 ## Why KMS
 
 ### Without KMS (Insecure)
@@ -157,7 +163,7 @@ KMS_LOCATION=global
 
 ## Architecture
 
-### Encryption Flow
+### Encryption Flow (Envelope Encryption)
 
 ```
 ┌─────────────────────────────────────────────────────────┐
@@ -169,11 +175,15 @@ KMS_LOCATION=global
 │  2. Serialize to JSON                                    │
 │     payload = JSON.stringify(request)                   │
 │                                                          │
-│  3. Call KMS encrypt                                     │
-│     encryptedPayload = kms.encrypt(payload, keyName)    │
+│  3. Envelope Encryption:                                │
+│     a. Generate random 32-byte DEK                      │
+│     b. Encrypt DEK with KMS → encryptedDEK             │
+│     c. Encrypt payload with DEK (AES-256-GCM)          │
+│     d. Create envelope { encryptedDEK, iv, authTag,    │
+│                          encryptedData }                │
 │                                                          │
-│  4. Store encrypted payload in GCS                       │
-│     gs://bucket/encrypted-payloads/{taskId}.bin         │
+│  4. Store encrypted envelope in GCS                      │
+│     gs://bucket/tasks/{taskId}/payload.enc              │
 │                                                          │
 │  5. Trigger job with task ID                            │
 │     jobRun({ env: { TASK_ID: taskId } })               │
@@ -184,11 +194,13 @@ KMS_LOCATION=global
 ┌─────────────────────────────────────────────────────────┐
 │          Job Worker (Cloud Run Job)                      │
 │                                                          │
-│  1. Read encrypted payload from GCS                      │
-│     encryptedPayload = gcs.read(taskId)                 │
+│  1. Read encrypted envelope from GCS                     │
+│     envelope = gcs.read(taskId)                         │
 │                                                          │
-│  2. Call KMS decrypt                                     │
-│     payload = kms.decrypt(encryptedPayload, keyName)    │
+│  2. Envelope Decryption:                                │
+│     a. Extract encryptedDEK from envelope               │
+│     b. Decrypt DEK with KMS → DEK (32 bytes)           │
+│     c. Decrypt payload with DEK (AES-256-GCM)          │
 │                                                          │
 │  3. Parse JSON to get credentials                        │
 │     request = JSON.parse(payload)                       │
@@ -197,10 +209,16 @@ KMS_LOCATION=global
 │  4. Execute task with credentials (in memory only)      │
 │     claudeRun({ apiKey, ... })                          │
 │                                                          │
-│  5. Cleanup - delete encrypted payload                   │
+│  5. Cleanup - delete encrypted envelope                  │
 │     gcs.delete(taskId)                                  │
 └─────────────────────────────────────────────────────────┘
 ```
+
+**Why Envelope Encryption?**
+- KMS has a 64KB limit for direct encryption
+- Task payloads with subagents/MCP configs can exceed this limit
+- Envelope encryption allows unlimited payload sizes
+- Only the small DEK (32 bytes) is encrypted with KMS
 
 ### Key Access Control
 
@@ -367,6 +385,20 @@ Error: Key not found: projects/PROJECT/locations/global/keyRings/claude-code/cry
    ./scripts/setup-kms.sh
    ```
 
+### Payload Size Limit Error
+
+**Symptoms:**
+```
+Error: KMS encryption failed: 3 INVALID_ARGUMENT: Request field plaintext must have length of at least 0, but not more than 65536. Provided value had length 66518.
+```
+
+**Cause:** This error occurred in legacy versions that used direct KMS encryption. The service now uses **envelope encryption** which has no practical size limit.
+
+**Solution:**
+1. Ensure you're using the latest version of the service (v2 with envelope encryption)
+2. The error should not occur with envelope encryption as only a 32-byte DEK is encrypted with KMS
+3. If you encounter this, verify the `EncryptionService` is using envelope encryption (version: 'v2-envelope')
+
 ### Decryption Failures
 
 **Symptoms:**
@@ -378,7 +410,7 @@ Error: Failed to decrypt payload: Invalid ciphertext
 
 1. Check encrypted payload exists:
    ```bash
-   gcloud storage ls gs://your-bucket/encrypted-payloads/
+   gcloud storage ls gs://your-bucket/tasks/
    ```
 
 2. Verify key version is enabled:
@@ -393,6 +425,11 @@ Error: Failed to decrypt payload: Invalid ciphertext
 3. Check logs for specific error:
    ```bash
    gcloud run jobs executions logs read EXECUTION_NAME --region=us-central1 | grep -i decrypt
+   ```
+
+4. Verify encryption format (should see "v2-envelope" in logs):
+   ```bash
+   gcloud run jobs executions logs read EXECUTION_NAME --region=us-central1 | grep -i "v2-envelope"
    ```
 
 ## Security Best Practices

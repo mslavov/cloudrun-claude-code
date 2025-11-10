@@ -1042,7 +1042,7 @@ Webhook receives:
 
 ### Timeout Handling
 
-Tasks have configurable timeout (default 55 min, max 60 min):
+Tasks have configurable timeout (default 55 min, max 1440 min / 24 hours):
 
 ```json
 {

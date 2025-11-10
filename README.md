@@ -274,7 +274,7 @@ See `examples/` folder for more request examples.
 | `gitDepth` | number | Clone depth for shallow cloning | 1 |
 | `sshKey` | string | SSH private key for git authentication (PEM format) | - |
 | `environmentSecrets` | object | Environment variables as key-value pairs | {} |
-| `timeoutMinutes` | number | Process timeout in minutes | 55 |
+| `timeoutMinutes` | number | Process timeout in minutes (max 1440 / 24 hours) | 55 |
 | `callbackUrl` | string | Webhook URL for async task completion (required for `/run-async`) | - |
 | `taskId` | string | Custom task ID (auto-generated if not provided, for `/run-async`) | - |
 | `metadata` | object | Custom metadata returned in callback (for `/run-async`) | - |
@@ -514,7 +514,7 @@ If jobs fail to execute or timeout:
 1. Check job logs: `gcloud run jobs executions logs read JOB_EXECUTION_NAME --region=us-central1`
 2. Verify job has enough memory/CPU (configured in deploy-job.sh)
 3. Check encrypted payload exists in GCS
-4. Ensure job timeout is sufficient (default: 60 minutes)
+4. Ensure job timeout is sufficient (Cloud Run Jobs support up to 24 hours)
 
 ### Authentication Errors
 - Ensure `anthropicApiKey` or `anthropicOAuthToken` is included in the request payload
@@ -534,7 +534,7 @@ If git commit/push operations fail:
 #### Claude Code SDK hanging in containers
 - The SDK may timeout in containerized environments (Docker/Cloud Run)
 - This is a known issue with the Claude Code SDK in non-interactive environments
-- The service includes timeout handling (default 55 minutes, max 60 minutes per Cloud Run limits)
+- The service includes timeout handling (default 55 minutes, max 1440 minutes / 24 hours per Cloud Run Jobs limits)
 - Consider using the official Anthropic API SDK for production deployments if this persists
 
 ### Service not responding

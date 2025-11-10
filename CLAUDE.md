@@ -156,7 +156,7 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `gitDepth`: Clone depth for shallow cloning (default: 1)
 - `environmentSecrets`: Object with environment variables as key-value pairs
 - `sshKey`: SSH private key for git authentication (PEM format)
-- `timeoutMinutes`: Process timeout in minutes (default: 55, max: 60)
+- `timeoutMinutes`: Process timeout in minutes (default: 55, max: 1440 / 24 hours)
 
 **Async-Only Parameters (/run-async):**
 - `callbackUrl` (required): Webhook URL to POST results when task completes
@@ -440,13 +440,13 @@ If jobs fail to execute or timeout:
 1. Check job logs: `gcloud run jobs executions logs read JOB_EXECUTION_NAME --region=us-central1`
 2. Verify job has enough memory/CPU (configured in deploy-job.sh)
 3. Check encrypted payload exists in GCS
-4. Ensure job timeout is sufficient (default: 60 minutes)
+4. Ensure job timeout is sufficient (Cloud Run Jobs support up to 24 hours)
 
 ### Authentication
 All authentication is handled via request payload (`anthropicApiKey` or `anthropicOAuthToken`). The service uses a token proxy to securely inject credentials without exposing them to the Claude CLI process.
 
 ### Process Timeouts
-Claude processes have a configurable timeout (default 55 minutes, max 60 minutes per Cloud Run limits). Long-running tasks may need timeout adjustment via `timeoutMinutes` option.
+Claude processes have a configurable timeout (default 55 minutes, max 1440 minutes / 24 hours per Cloud Run Jobs limits). Long-running tasks may need timeout adjustment via `timeoutMinutes` option.
 
 ### Named Pipe vs Direct Input
 The service supports two prompt delivery methods:

@@ -346,7 +346,7 @@ gcloud storage cat gs://your-bucket/sessions/TASK_ID/metadata.json
 
 **Solutions:**
 1. Reduce task complexity or split into smaller tasks
-2. Check `timeoutMinutes` in request (max: 60)
+2. Check `timeoutMinutes` in request (max: 1440 / 24 hours)
 3. Verify job timeout configuration:
    ```bash
    gcloud run jobs describe claude-code-job --region=us-central1 --format="value(template.template.spec.timeoutSeconds)"

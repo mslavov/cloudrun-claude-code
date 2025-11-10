@@ -203,7 +203,7 @@ export class ClaudeRunner {
       this.kill();
     });
 
-    // Wait for completion with timeout
+    // Wait for completion with timeout (default: 55 minutes, max: 1440 minutes / 24 hours for Cloud Run Jobs)
     const timeoutMs = (options.timeoutMinutes || 55) * 60 * 1000;
 
     return new Promise((resolve) => {
@@ -339,7 +339,7 @@ export class ClaudeRunner {
       logger.error("Claude stderr:", data.toString());
     });
 
-    // Wait for completion with timeout
+    // Wait for completion with timeout (default: 55 minutes, max: 1440 minutes / 24 hours for Cloud Run Jobs)
     const timeoutMs = (options.timeoutMinutes || 55) * 60 * 1000;
 
     return new Promise((resolve) => {

@@ -265,7 +265,7 @@ The deployment creates:
 ### Service Resources
 - **CPU:** 2 vCPUs (configurable in .env)
 - **Memory:** 4GB (configurable in .env)
-- **Timeout:** 15 minutes (configurable in .env, up to 60 min max)
+- **Timeout:** 15 minutes (configurable in .env, Cloud Run Jobs support up to 24 hours)
 - **Concurrency:** 1 request per instance (security isolation)
 - **Scaling:** 0-10 instances (configurable in .env)
 - **Per-request resources:** Full 4GB RAM, 2 CPU cores
@@ -349,7 +349,7 @@ If jobs fail to execute or timeout:
 2. List job executions: `gcloud run jobs executions list CLOUDRUN_JOB_NAME --region=us-central1`
 3. Verify job has enough memory/CPU (configured in deploy-job.sh)
 4. Check encrypted payload exists in GCS
-5. Ensure job timeout is sufficient (default: 60 minutes)
+5. Ensure job timeout is sufficient (Cloud Run Jobs support up to 24 hours)
 
 ### Deployment Fails
 

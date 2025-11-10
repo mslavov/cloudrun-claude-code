@@ -128,7 +128,7 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `model` | string | No | - | Specific Claude model to use |
 | `fallbackModel` | string | No | - | Fallback model if primary fails |
 | `useNamedPipe` | boolean | No | true | Use named pipe for prompt delivery |
-| `timeoutMinutes` | number | No | 55 | Process timeout in minutes (max 60 per Cloud Run) |
+| `timeoutMinutes` | number | No | 55 | Process timeout in minutes (max 1440 / 24 hours per Cloud Run Jobs) |
 | `gitRepo` | string | No | - | Git repository URL to clone (SSH or HTTPS) |
 | `gitBranch` | string | No | main | Git branch to checkout |
 | `gitDepth` | number | No | 1 | Clone depth for shallow cloning |

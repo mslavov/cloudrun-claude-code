@@ -66,22 +66,29 @@ const getLogLevel = (moduleName?: string): LogLevel => {
 };
 
 /**
- * Configure Pino transport based on environment
+ * Configure Pino transport based on environment and log level
  * - Development: Pretty-printed colored output
- * - Production: Structured JSON output for Cloud Logging
+ * - Production with debug enabled: Pretty-printed output for readability
+ * - Production without debug: Structured JSON output for Cloud Logging
  */
 const getTransport = () => {
-  if (process.env.NODE_ENV === 'development') {
+  const isDevelopment = process.env.NODE_ENV === 'development';
+  const isDebugEnabled = process.env.LOG_LEVEL?.toLowerCase() === 'debug';
+
+  // Use pretty output in development or when debug is enabled in production
+  if (isDevelopment || isDebugEnabled) {
     return {
       target: 'pino-pretty',
       options: {
         colorize: true,
         translateTime: 'HH:MM:ss',
-        ignore: 'pid,hostname',
+        ignore: 'pid,hostname,module',
+        messageFormat: '{msg}',
       }
     };
   }
-  // Production: JSON output (no transport)
+
+  // Production with normal log level: JSON output (no transport)
   return undefined;
 };
 

@@ -132,6 +132,7 @@ Execute a Claude Code prompt with streaming response, optionally cloning a git r
 | `gitRepo` | string | No | - | Git repository URL to clone (SSH or HTTPS) |
 | `gitBranch` | string | No | main | Git branch to checkout |
 | `gitDepth` | number | No | 1 | Clone depth for shallow cloning |
+| `preExecutionCommands` | string[] | No | - | Shell commands to run after git clone, before Claude starts. Executed sequentially; any failure stops the request |
 | `environmentSecrets` | object | No | {} | Environment variables to inject as key-value pairs |
 | `sshKey` | string | No | - | SSH private key for git authentication (PEM format) |
 | `mcpConfig` | object | No | - | Raw .mcp.json content for MCP servers (see Enhanced Configuration below) |
@@ -784,6 +785,35 @@ curl -X POST https://YOUR-SERVICE-URL.run.app/run \
     }
   }'
 ```
+
+### With Pre-Execution Commands
+
+```bash
+curl -X POST https://YOUR-SERVICE-URL.run.app/run \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $(gcloud auth print-identity-token)" \
+  -d '{
+    "prompt": "Run the test suite and fix any failures",
+    "gitRepo": "https://github.com:myorg/frontend.git",
+    "gitBranch": "main",
+    "preExecutionCommands": [
+      "npm ci",
+      "npx playwright install --with-deps"
+    ],
+    "environmentSecrets": {
+      "CI": "true"
+    },
+    "maxTurns": 20
+  }'
+```
+
+**Pre-Execution Commands Behavior:**
+- Run sequentially in order, after git clone completes
+- Execute before Claude Code session starts
+- Run in the workspace directory with access to environment variables
+- **Fail-fast**: If any command fails, the entire request fails immediately
+- Common use cases: installing dependencies (`npm ci`, `npm install`), setting up test browsers (`playwright install`), running build scripts
+- Output is logged to server logs (5-minute timeout per command)
 
 ### With Enhanced Configuration (MCP + Slash Commands + Subagents)
 

@@ -1,5 +1,6 @@
 import path from "path";
 import crypto from "crypto";
+import { execSync } from "child_process";
 import { ClaudeRunner, ClaudeOptions } from "../../claude-runner.js";
 import { GitService } from "./git.service.js";
 import { WorkspaceService } from "./workspace.service.js";
@@ -85,6 +86,16 @@ export class TaskService {
         sshKeyPath,
         logPrefix
       );
+
+      // Execute pre-execution commands if provided
+      if (request.preExecutionCommands && request.preExecutionCommands.length > 0) {
+        await this.executePreExecutionCommands(
+          request.preExecutionCommands,
+          workspaceRoot,
+          claudeEnv,
+          logPrefix
+        );
+      }
 
       // Build Claude options
       const options = this.buildClaudeOptions(request, claudeEnv);
@@ -318,6 +329,73 @@ export class TaskService {
     }
 
     return claudeEnv;
+  }
+
+  /**
+   * Execute pre-execution commands before starting Claude
+   */
+  private async executePreExecutionCommands(
+    commands: string[],
+    workspaceRoot: string,
+    env: Record<string, string>,
+    logPrefix: string = ''
+  ): Promise<void> {
+    logger.info(`${logPrefix} Executing ${commands.length} pre-execution command(s)`);
+
+    for (const [index, command] of commands.entries()) {
+      const commandNumber = index + 1;
+      logger.info(`${logPrefix} [${commandNumber}/${commands.length}] Running: ${command}`);
+
+      try {
+        const startTime = Date.now();
+
+        // Execute command with environment variables and in the workspace directory
+        const output = execSync(command, {
+          cwd: workspaceRoot,
+          env: {
+            ...process.env,
+            ...env,
+            // Ensure npm/pnpm use CI mode
+            CI: 'true',
+          },
+          encoding: 'utf-8',
+          // 5 minute timeout per command
+          timeout: 300000,
+          // Capture both stdout and stderr
+          stdio: 'pipe'
+        });
+
+        const durationMs = Date.now() - startTime;
+        logger.info(`${logPrefix} [${commandNumber}/${commands.length}] ✓ Completed in ${durationMs}ms`);
+
+        // Log output if present (truncate if too long)
+        if (output && output.trim()) {
+          const truncatedOutput = output.length > 500
+            ? output.substring(0, 500) + '... (truncated)'
+            : output;
+          logger.debug(`${logPrefix} [${commandNumber}/${commands.length}] Output: ${truncatedOutput}`);
+        }
+
+      } catch (error: any) {
+        logger.error(`${logPrefix} [${commandNumber}/${commands.length}] ✗ Command failed: ${command}`);
+        logger.error(`${logPrefix} [${commandNumber}/${commands.length}] Error: ${error.message}`);
+
+        // Log stderr if available
+        if (error.stderr) {
+          logger.error(`${logPrefix} [${commandNumber}/${commands.length}] stderr: ${error.stderr.toString()}`);
+        }
+
+        // Log stdout if available (some commands output to stdout even on failure)
+        if (error.stdout) {
+          logger.debug(`${logPrefix} [${commandNumber}/${commands.length}] stdout: ${error.stdout.toString()}`);
+        }
+
+        // Fail fast - don't continue with remaining commands
+        throw new Error(`Pre-execution command failed: ${command}\n${error.message}`);
+      }
+    }
+
+    logger.info(`${logPrefix} ✓ All pre-execution commands completed successfully`);
   }
 
   /**

@@ -631,7 +631,32 @@ curl -N -X POST http://localhost:8080/run \
     "permissionMode": "acceptEdits"
   }'
 
-7. FOR CLOUD RUN (with auth)
+7. WITH PRE-EXECUTION COMMANDS
+------------------------------
+curl -N -X POST http://localhost:8080/run \
+  -H "Content-Type: application/json" \
+  -d '{
+    "prompt": "Run the test suite and fix any failures",
+    "anthropicApiKey": "sk-ant-your-key-here",
+    "gitRepo": "https://github.com/owner/frontend-app",
+    "gitBranch": "main",
+    "preExecutionCommands": [
+      "npm ci",
+      "npx playwright install --with-deps"
+    ],
+    "environmentSecrets": {
+      "CI": "true"
+    },
+    "maxTurns": 20,
+    "allowedTools": ["Read", "Write", "Edit", "Bash"],
+    "permissionMode": "bypassPermissions"
+  }'
+
+# Pre-execution commands run AFTER git clone, BEFORE Claude starts
+# Commands execute sequentially - any failure stops the entire request
+# Common use cases: npm install, playwright install, build scripts
+
+8. FOR CLOUD RUN (with auth)
 ----------------------------
 AUTH_TOKEN=$(gcloud auth print-identity-token)
 curl -N -X POST https://your-service-url/run \

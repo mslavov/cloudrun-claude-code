@@ -154,6 +154,7 @@ The service uses a local proxy that intercepts Claude's API calls and replaces d
 - `gitRepo`: Git repository URL to clone (SSH or HTTPS)
 - `gitBranch`: Git branch to checkout (default: main)
 - `gitDepth`: Clone depth for shallow cloning (default: 1)
+- `preExecutionCommands`: Array of shell commands to run after git clone, before Claude starts (fail-fast: any command failure stops the request)
 - `environmentSecrets`: Object with environment variables as key-value pairs
 - `sshKey`: SSH private key for git authentication (PEM format)
 - `timeoutMinutes`: Process timeout in minutes (default: 55, max: 1440 / 24 hours)

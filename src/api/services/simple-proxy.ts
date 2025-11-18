@@ -1,7 +1,9 @@
 import http from 'http';
 import https from 'https';
 import { URL } from 'url';
-import { logger } from '../../utils/logger.js';
+import { createModuleLogger } from '../../utils/logger.js';
+
+const logger = createModuleLogger('proxy');
 
 /**
  * SimpleAnthropicProxy - A minimal HTTP proxy that intercepts requests to api.anthropic.com

@@ -5,7 +5,9 @@ import { unlink, writeFile, access } from "fs/promises";
 import { createWriteStream } from "fs";
 import { constants } from "fs";
 import path from "path";
-import { logger } from "./utils/logger.js";
+import { createModuleLogger } from "./utils/logger.js";
+
+const logger = createModuleLogger('claude-runner');
 
 const execAsync = promisify(exec);
 
@@ -114,6 +116,9 @@ export class ClaudeRunner {
   ): Promise<ClaudeRunResult> {
     // Write prompt to file
     await writeFile(this.promptPath, prompt);
+
+    // Log full prompt content at debug level
+    logger.debug("Full prompt content:", prompt);
 
     // Create named pipe
     await this.createNamedPipe();
@@ -272,6 +277,9 @@ export class ClaudeRunner {
     onData: (data: string) => void,
     onError: (error: string) => void
   ): Promise<ClaudeRunResult> {
+    // Log full prompt content at debug level
+    logger.debug("Full prompt content:", prompt);
+
     const claudeArgs = await this.buildArgs(options);
     logger.debug("Starting Claude with args:", claudeArgs);
 

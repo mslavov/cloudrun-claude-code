@@ -1,9 +1,11 @@
 import { Storage, Bucket, File } from "@google-cloud/storage";
-import { logger } from "../../utils/logger.js";
+import { createModuleLogger } from "../../utils/logger.js";
 import { Writable } from "stream";
 import { glob } from "glob";
 import * as fs from "fs";
 import * as path from "path";
+
+const logger = createModuleLogger('gcs');
 
 /**
  * GCS Logger Service

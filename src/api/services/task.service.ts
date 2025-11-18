@@ -7,7 +7,9 @@ import { ClaudeConfigService } from "./claude-config.service.js";
 import { SimpleAnthropicProxy } from "./simple-proxy.js";
 import { OutputHandler } from "./output-handlers.js";
 import { RunRequest } from "../types/request.types.js";
-import { logger } from "../../utils/logger.js";
+import { createModuleLogger } from "../../utils/logger.js";
+
+const logger = createModuleLogger('task');
 
 /**
  * TaskService

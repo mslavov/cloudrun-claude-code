@@ -1,24 +1,16 @@
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
-import { execSync } from "child_process";
 import { logger } from "../../utils/logger.js";
 
 export class WorkspaceService {
   // Create a new workspace directory owned by claudeuser
-  async createWorkspace(baseDir: string = "/tmp"): Promise<string> {
+  // Uses /tmp/workspaces as base (pre-created in Dockerfile with correct ownership)
+  async createWorkspace(baseDir: string = "/tmp/workspaces"): Promise<string> {
     const requestId = crypto.randomBytes(8).toString("hex");
     const workspaceRoot = path.join(baseDir, `ws-${requestId}`);
     await fs.mkdir(workspaceRoot, { recursive: true });
-
-    // SECURITY: Change ownership to claudeuser (UID 1002)
-    // This ensures the workspace is isolated from server code
-    try {
-      execSync(`chown -R 1002:1002 "${workspaceRoot}"`, { stdio: 'pipe' });
-    } catch (err) {
-      logger.warn('Warning: Could not change workspace ownership to claudeuser:', err);
-    }
-
+    // No chown needed - /tmp/workspaces is already owned by claudeuser (set in Dockerfile)
     return workspaceRoot;
   }
 

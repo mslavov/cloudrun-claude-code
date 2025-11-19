@@ -340,7 +340,19 @@ export class TaskService {
     env: Record<string, string>,
     logPrefix: string = ''
   ): Promise<void> {
-    logger.info(`${logPrefix} Executing ${commands.length} pre-execution command(s)`);
+    logger.info(`${logPrefix} Executing ${commands.length} pre-execution command(s) in: ${workspaceRoot}`);
+
+    // Build clean environment without npm-specific vars that could cause issues
+    const cleanEnv: Record<string, string> = {};
+    for (const [key, value] of Object.entries(process.env)) {
+      // Skip npm_ prefixed vars that could interfere with npm commands
+      if (key.startsWith('npm_') || key === 'NODE_PATH' || key === 'PWD') {
+        continue;
+      }
+      if (value !== undefined) {
+        cleanEnv[key] = value;
+      }
+    }
 
     for (const [index, command] of commands.entries()) {
       const commandNumber = index + 1;
@@ -349,14 +361,16 @@ export class TaskService {
       try {
         const startTime = Date.now();
 
-        // Execute command with environment variables and in the workspace directory
+        // Execute command with cleaned environment and in the workspace directory
         const output = execSync(command, {
           cwd: workspaceRoot,
           env: {
-            ...process.env,
+            ...cleanEnv,
             ...env,
             // Ensure npm/pnpm use CI mode
             CI: 'true',
+            // Explicitly set HOME for npm config location
+            HOME: process.env.HOME || '/home/claudeuser',
           },
           encoding: 'utf-8',
           // 5 minute timeout per command

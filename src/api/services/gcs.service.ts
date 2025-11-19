@@ -319,16 +319,21 @@ export class GCSLoggerService {
    * @param taskId - Task identifier for organizing uploads
    * @param filePath - Absolute path to file to upload
    * @param gcsPrefix - Optional prefix in bucket (default: files/{taskId})
+   * @param workspacePath - Optional workspace root to preserve relative paths
    * @returns GCS path of uploaded file
    */
   async uploadFile(
     taskId: string,
     filePath: string,
-    gcsPrefix?: string
+    gcsPrefix?: string,
+    workspacePath?: string
   ): Promise<string> {
-    const fileName = path.basename(filePath);
+    // Use relative path if workspace provided, otherwise just basename
+    const relativePath = workspacePath
+      ? path.relative(workspacePath, filePath)
+      : path.basename(filePath);
     const prefix = gcsPrefix || `files/${taskId}`;
-    const gcsPath = `${prefix}/${fileName}`;
+    const gcsPath = `${prefix}/${relativePath}`;
     const file = this.bucket.file(gcsPath);
 
     try {
@@ -399,7 +404,7 @@ export class GCSLoggerService {
         for (const filePath of matches) {
           try {
             const stats = await fs.promises.stat(filePath);
-            const gcsPath = await this.uploadFile(taskId, filePath, gcsPrefix);
+            const gcsPath = await this.uploadFile(taskId, filePath, gcsPrefix, workspacePath);
 
             results.push({
               originalPath: filePath,

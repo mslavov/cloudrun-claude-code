@@ -1,7 +1,7 @@
 /**
- * Logger Utility with Per-Module Log Levels (Pino-based)
+ * Logger Utility with Per-Module Log Levels
  *
- * Provides hierarchical logging with support for per-module log level control.
+ * Simple console-based logger with hierarchical log level support.
  *
  * Log Levels (hierarchical):
  * - debug: Shows all logs (debug, info, warn, error)
@@ -10,30 +10,20 @@
  * - error: Shows only errors
  *
  * Environment Variables:
- * - LOG_LEVEL: Global default log level (default: 'info' in production, 'debug' in development)
- * - LOG_LEVEL_[MODULE]: Per-module log level override (e.g., LOG_LEVEL_CLAUDE_RUNNER=debug)
+ * - LOG_LEVEL: Global default log level (default: 'info')
+ * - LOG_LEVEL_[MODULE]: Per-module log level override (e.g., LOG_LEVEL_PROXY=debug)
  *
  * Usage:
  * ```typescript
- * // Default logger (for backward compatibility)
- * import { logger } from './logger.js';
- * logger.info('message');
- *
- * // Module-specific logger
  * import { createModuleLogger } from './logger.js';
- * const logger = createModuleLogger('claude-runner');
- * logger.debug('detailed message'); // Respects LOG_LEVEL_CLAUDE_RUNNER
+ * const logger = createModuleLogger('proxy');
+ * logger.debug('detailed message'); // Respects LOG_LEVEL_PROXY
+ * logger.info('info message');      // Output: [proxy] info message
  * ```
  */
 
-import pino from 'pino';
-
 type LogLevel = 'debug' | 'info' | 'warn' | 'error';
 
-/**
- * Logger interface that matches our old console.log-style API
- * Provides backward compatibility while using Pino under the hood
- */
 interface Logger {
   debug(...args: any[]): void;
   info(...args: any[]): void;
@@ -41,102 +31,40 @@ interface Logger {
   error(...args: any[]): void;
 }
 
+const LOG_LEVEL_VALUES: Record<LogLevel, number> = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3,
+};
+
 /**
  * Get the configured log level from environment
- * Supports both global LOG_LEVEL and per-module LOG_LEVEL_[MODULE] overrides
  */
 const getLogLevel = (moduleName?: string): LogLevel => {
   // Check for module-specific log level first
   if (moduleName) {
     const moduleEnvVar = `LOG_LEVEL_${moduleName.toUpperCase().replace(/[^A-Z0-9]/g, '_')}`;
     const moduleLevel = process.env[moduleEnvVar]?.toLowerCase() as LogLevel;
-    if (moduleLevel && ['debug', 'info', 'warn', 'error'].includes(moduleLevel)) {
+    if (moduleLevel && LOG_LEVEL_VALUES[moduleLevel] !== undefined) {
       return moduleLevel;
     }
   }
 
   // Fall back to global LOG_LEVEL
   const envLevel = process.env.LOG_LEVEL?.toLowerCase() as LogLevel;
-  if (envLevel && ['debug', 'info', 'warn', 'error'].includes(envLevel)) {
+  if (envLevel && LOG_LEVEL_VALUES[envLevel] !== undefined) {
     return envLevel;
   }
 
-  // Default: debug in development, info in production
-  return process.env.NODE_ENV === 'development' ? 'debug' : 'info';
+  return 'info';
 };
 
 /**
- * Configure Pino transport based on environment and log level
- * - Development: Pretty-printed colored output
- * - Production with debug enabled: Pretty-printed output for readability
- * - Production without debug: Structured JSON output for Cloud Logging
+ * Format arguments into a single string
  */
-const getTransport = () => {
-  const isDevelopment = process.env.NODE_ENV === 'development';
-  const isDebugEnabled = process.env.LOG_LEVEL?.toLowerCase() === 'debug';
-
-  // Use pretty output in development or when debug is enabled in production
-  if (isDevelopment || isDebugEnabled) {
-    return {
-      target: 'pino-pretty',
-      options: {
-        colorize: true,
-        translateTime: 'HH:MM:ss',
-        ignore: 'pid,hostname,module',
-        messageFormat: '{msg}',
-      }
-    };
-  }
-
-  // Production with normal log level: JSON output (no transport)
-  return undefined;
-};
-
-/**
- * Create base Pino logger instance
- */
-const basePinoLogger = pino({
-  level: getLogLevel(),
-  transport: getTransport(),
-});
-
-/**
- * Format arguments for Pino logging
- * Converts variadic args into a message string and optional data object
- */
-const formatArgs = (args: any[]): { msg: string; data?: any } => {
-  if (args.length === 0) {
-    return { msg: '' };
-  }
-
-  // If first arg is a string, use it as the message
-  if (typeof args[0] === 'string') {
-    const msg = args[0];
-
-    // If there's only one arg, just return the message
-    if (args.length === 1) {
-      return { msg };
-    }
-
-    // If there are more args, combine them into the message
-    // This maintains backward compatibility with console.log-style usage
-    const restArgs = args.slice(1);
-    const formattedRest = restArgs.map(arg => {
-      if (typeof arg === 'object') {
-        try {
-          return JSON.stringify(arg);
-        } catch {
-          return String(arg);
-        }
-      }
-      return String(arg);
-    }).join(' ');
-
-    return { msg: `${msg} ${formattedRest}` };
-  }
-
-  // If first arg is not a string, stringify everything
-  const formattedArgs = args.map(arg => {
+const formatArgs = (args: any[]): string => {
+  return args.map(arg => {
     if (typeof arg === 'object') {
       try {
         return JSON.stringify(arg);
@@ -146,56 +74,44 @@ const formatArgs = (args: any[]): { msg: string; data?: any } => {
     }
     return String(arg);
   }).join(' ');
-
-  return { msg: formattedArgs };
 };
 
 /**
- * Create a module-specific logger with its own log level
- * Wraps Pino with a backward-compatible console.log-style API
- *
- * @param moduleName - Name of the module (e.g., 'claude-runner', 'proxy', 'task', 'gcs')
- * @returns Logger instance with module-specific log level
- *
- * @example
- * ```typescript
- * const logger = createModuleLogger('claude-runner');
- * logger.debug('Starting Claude with args:', args); // Respects LOG_LEVEL_CLAUDE_RUNNER
- * ```
+ * Create a module-specific logger
  */
 export const createModuleLogger = (moduleName: string): Logger => {
   const moduleLevel = getLogLevel(moduleName);
-  const childLogger = basePinoLogger.child({ module: moduleName });
+  const levelValue = LOG_LEVEL_VALUES[moduleLevel];
+  const prefix = `[${moduleName}]`;
 
-  // Set module-specific log level
-  childLogger.level = moduleLevel;
-
-  // Wrap Pino with backward-compatible API
   return {
     debug(...args: any[]): void {
-      const { msg } = formatArgs(args);
-      childLogger.debug(msg);
+      if (levelValue <= LOG_LEVEL_VALUES.debug) {
+        console.log(prefix, formatArgs(args));
+      }
     },
 
     info(...args: any[]): void {
-      const { msg } = formatArgs(args);
-      childLogger.info(msg);
+      if (levelValue <= LOG_LEVEL_VALUES.info) {
+        console.log(prefix, formatArgs(args));
+      }
     },
 
     warn(...args: any[]): void {
-      const { msg } = formatArgs(args);
-      childLogger.warn(msg);
+      if (levelValue <= LOG_LEVEL_VALUES.warn) {
+        console.warn(prefix, formatArgs(args));
+      }
     },
 
     error(...args: any[]): void {
-      const { msg } = formatArgs(args);
-      childLogger.error(msg);
+      if (levelValue <= LOG_LEVEL_VALUES.error) {
+        console.error(prefix, formatArgs(args));
+      }
     }
   };
 };
 
 /**
  * Default logger for backward compatibility
- * Use createModuleLogger() for module-specific log level control
  */
 export const logger = createModuleLogger('default');

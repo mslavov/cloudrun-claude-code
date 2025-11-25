@@ -82,6 +82,15 @@ DANGEROUSLY_SKIP_PERMISSIONS: "${DANGEROUSLY_SKIP_PERMISSIONS}"
 LOG_LEVEL: "${LOG_LEVEL}"
 EOF
 
+# Add all LOG_LEVEL_* variables from environment
+for var in $(env | grep '^LOG_LEVEL_' | cut -d= -f1); do
+  value="${!var}"
+  if [ -n "$value" ]; then
+    echo "${var}: \"${value}\"" >> "${ENV_FILE}"
+    echo "  Adding ${var}=${value}"
+  fi
+done
+
 # Add GCS configuration if async tasks are enabled
 if [ -n "${GCS_LOGS_BUCKET}" ]; then
   cat >> "${ENV_FILE}" << EOF

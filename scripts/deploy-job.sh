@@ -62,7 +62,17 @@ fi
 echo ""
 echo "🚀 ${OPERATION} Cloud Run Job..."
 
-gcloud run jobs ${CMD} "${JOB_NAME}" \
+# Build LOG_LEVEL_* env vars string
+LOG_LEVEL_VARS=""
+for var in $(env | grep '^LOG_LEVEL_' | cut -d= -f1); do
+  value="${!var}"
+  if [ -n "$value" ]; then
+    LOG_LEVEL_VARS="${LOG_LEVEL_VARS} --set-env-vars=\"${var}=${value}\""
+    echo "  Adding ${var}=${value}"
+  fi
+done
+
+eval gcloud run jobs ${CMD} "${JOB_NAME}" \
   --image="${IMAGE}" \
   --region="${LOCATION}" \
   --project="${PROJECT_ID}" \
@@ -76,6 +86,7 @@ gcloud run jobs ${CMD} "${JOB_NAME}" \
   --set-env-vars="GCS_LOGS_BUCKET=${GCS_LOGS_BUCKET}" \
   --set-env-vars="GCS_PROJECT_ID=${PROJECT_ID}" \
   --set-env-vars="LOG_LEVEL=${LOG_LEVEL:-info}" \
+  ${LOG_LEVEL_VARS} \
   --set-secrets="CLOUDRUN_CALLBACK_SECRET=CLOUDRUN_CALLBACK_SECRET:latest" \
   --command=node \
   --args=dist/job-worker.js

@@ -91,11 +91,10 @@ export class ClaudeConfigService {
     this.validateEnvVarsInObject(mcpConfig, environmentSecrets);
 
     // Write raw config - Claude Code will expand ${VAR} references
-    await fs.writeFile(
-      mcpConfigPath,
-      JSON.stringify(mcpConfig, null, 2),
-      'utf-8'
-    );
+    const mcpConfigJson = JSON.stringify(mcpConfig, null, 2);
+    await fs.writeFile(mcpConfigPath, mcpConfigJson, 'utf-8');
+
+    logger.debug(`MCP config content:\n${mcpConfigJson}`);
 
     return '.mcp.json';
   }
